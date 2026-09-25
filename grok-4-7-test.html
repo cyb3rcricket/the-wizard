@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Wizard</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #05020e;
+    overflow: hidden;
+    position: fixed;
+    inset: 0;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<script>
+(function () {
+  "use strict";
+
+  var LW = 128;
+  var LH = 96;
+  var FLOOR = 84;
+
+  /* 24-color palette. Every pixel on the logical canvas is one of these. */
+  var PAL = [
+    "#05020e", /* 0  void, top sky */
+    "#100c24", /* 1  night */
+    "#1a1434", /* 2  lower sky */
+    "#2c1e4c", /* 3  horizon */
+    "#f4ecd8", /* 4  moon */
+    "#c8b89a", /* 5  moon shade */
+    "#fffaf2", /* 6  white */
+    "#9c90b4", /* 7  dim star, stone edge */
+    "#0e0812", /* 8  outline */
+    "#5c3c7c", /* 9  hat */
+    "#8d3a5c", /* 10 robe */
+    "#c46a88", /* 11 robe light */
+    "#54243c", /* 12 robe deep */
+    "#f3c7a0", /* 13 skin */
+    "#c48c5c", /* 14 skin shade */
+    "#f6f0e4", /* 15 beard */
+    "#d2c6b4", /* 16 beard shade */
+    "#f0c048", /* 17 gold */
+    "#7c4e2e", /* 18 staff wood */
+    "#3f2614", /* 19 staff dark, boots */
+    "#5ef3ff", /* 20 cyan */
+    "#c44cff", /* 21 violet */
+    "#ff5cbe", /* 22 pink */
+    "#d4f4ff"  /* 23 pale rim */
+  ];
+
+  var COL_WHITE = 6;
+  var COL_OUT = 8;
+  var COL_ROBE = 10;
+  var COL_ROBE_L = 11;
+  var COL_ROBE_D = 12;
+  var COL_SKIN = 13;
+  var COL_GOLD = 17;
+  var COL_WOOD = 18;
+  var COL_WOOD_D = 19;
+  var COL_CYAN = 20;
+
+  /* Particle life fades white -> cyan -> violet -> pink -> outline. */
+  var COLSEQ = new Uint8Array([6, 20, 21, 22, 8]);
+
+  var INK = {
+    o: 8, h: 9, s: 13, k: 14, e: 8, b: 15, a: 16, g: 17
+  };
+
+  /* Pointed hat, tip kinked to the right. Rows are 22 logical pixels. */
+  var HAT_ART = [
+    ".....hh...............",
+    ".......hhhh...........",
+    ".........hh...........",
+    "......ohhhhh..........",
+    ".....ohhhhhhh.........",
+    "....ohhhhhhhhhh.......",
+    "...ohhhhhhhhhhhh......",
+    "..ohggggggggghhhh.....",
+    "...hhhhhhhhhhhhhh.....",
+    "..oooooooooooooooo...."
+  ];
+
+  var FACE_ART = [
+    ".....kssssssssk.......",
+    ".....ks.ee.ee.sk......",
+    "......skkkkkkksk......"
+  ];
+
+  var FACE_BLINK = [
+    ".....kssssssssk.......",
+    ".....ksssssssssk......",
+    "......skkkkkkksk......"
+  ];
+
+  /* Long beard. Shade streak gives it a twist when it sways. */
+  var BEARD_ART = [
+    "....obbbbbbbbbbo......",
+    "...obbbbbbbbbbbbo.....",
+    "...obbbbaaaabbbbo.....",
+    "....obbbbaaabbbbo.....",
+    ".....obbbbaabbbbo.....",
+    ".....obbbbbbbbbbo.....",
+    "......obbbbbbbbo......",
+    ".......obbbbbbo.......",
+    "........obbbbo........",
+    ".........obbo.........",
+    "..........oo.........."
+  ];
+
+  /* Robe rows: localY, x, width. Lower rows (y >= 22) take the sway offset. */
+  var ROBE_ROWS = [
+    12, 5, 12,
+    13, 4, 14,
+    14, 3, 16,
+    15, 3, 16,
+    16, 2, 18,
+    17, 2, 18,
+    18, 2, 17,
+    19, 3, 16,
+    20, 3, 15,
+    21, 4, 14,
+    22, 3, 16,
+    23, 2, 18,
+    24, 1, 20,
+    25, 2, 18,
+    26, 3, 16,
+    27, 4, 14
+  ];
+
+  var ST_IDLE = 0;
+  var ST_CHARGE = 1;
+  var ST_CAST = 2;
+  var ST_RECOVER = 3;
+  var DUR = [180, 108, 42, 72];
+  var POOL = 56;
+  var STEP = 1000 / 60;
+
+  var view = document.getElementById("view");
+  var vctx = view.getContext("2d", { alpha: false });
+  var off = document.createElement("canvas");
+  off.width = LW;
+  off.height = LH;
+  var octx = off.getContext("2d", { alpha: false });
+  var bg = document.createElement("canvas");
+  bg.width = LW;
+  bg.height = LH;
+  var bctx = bg.getContext("2d", { alpha: false });
+
+  var pen = -1;
+  var viewW = 0;
+  var viewH = 0;
+  var scale = 1;
+  var destX = 0;
+  var destY = 0;
+
+  var hatRuns, faceRuns, blinkRuns, beardRuns;
+  var rimHat, rimRobeHi, rimRobeLo;
+
+  var mode = new Uint8Array(POOL);
+  var pxx = new Float32Array(POOL);
+  var pyy = new Float32Array(POOL);
+  var pvx = new Float32Array(POOL);
+  var pvy = new Float32Array(POOL);
+  var pang = new Float32Array(POOL);
+  var prad = new Float32Array(POOL);
+  var plife = new Float32Array(POOL);
+  var pmax = new Float32Array(POOL);
+
+  var SX = new Int8Array([6, 18, 32, 46, 60, 74, 88, 120, 14, 38, 56, 78, 96, 12, 28, 50, 70, 124, 8, 42]);
+  var SY = new Int8Array([5, 11, 7, 16, 4, 13, 20, 6, 26, 22, 9, 18, 28, 38, 34, 30, 36, 14, 18, 42]);
+  var SP = new Int8Array([0, 5, 11, 3, 17, 8, 14, 2, 19, 6, 13, 9, 1, 16, 4, 12, 7, 18, 10, 15]);
+
+  var tick = 0;
+  var state = ST_IDLE;
+  var stateTick = 0;
+  var staff = -1.5;
+  var arm = 0;
+  var tilt = 0;
+  var sway = 0;
+  var bob = 0;
+  var beard = 0;
+  var staff0 = -1.5;
+  var arm0 = 0;
+  var tilt0 = 0;
+  var sway0 = 0;
+  var bob0 = 0;
+  var beard0 = 0;
+  var tStaff = -1.5;
+  var tArm = 0;
+  var tTilt = 0;
+  var tSway = 0;
+  var tBob = 0;
+  var tBeard = 0;
+
+  var originX = 30;
+  var originY = 53;
+  var hatX = 30;
+  var faceX = 30;
+  var beardX = 30;
+  var swayPx = 0;
+  var handX = 0;
+  var handY = 0;
+  var shoulderX = 0;
+  var shoulderY = 0;
+  var gemX = 0;
+  var gemY = 0;
+  var buttX = 0;
+  var buttY = 0;
+  var bandX = 0;
+  var bandY = 0;
+  var staffNx = 0;
+  var staffNy = 1;
+
+  var gemC = 21;
+  var glow = 0;
+  var shx = 0;
+  var shy = 0;
+  var blink = 0;
+  var burstR = 0;
+
+  var boltOn = 0;
+  var boltX = 0;
+  var boltY = 0;
+  var impactT = 0;
+  var impactX = 0;
+  var impactY = 0;
+
+  var lastT = 0;
+  var acc = 0;
+
+  function ink(c) {
+    if (pen !== c) {
+      pen = c;
+      octx.fillStyle = PAL[c];
+    }
+  }
+
+  function rect(x, y, w, h, c) {
+    ink(c);
+    octx.fillRect(x | 0, y | 0, w | 0, h | 0);
+  }
+
+  function px(x, y, c) {
+    ink(c);
+    octx.fillRect(x | 0, y | 0, 1, 1);
+  }
+
+  function stroke(x0, y0, x1, y1, c) {
+    var dx, dy, sx, sy, err, e2;
+    x0 |= 0;
+    y0 |= 0;
+    x1 |= 0;
+    y1 |= 0;
+    dx = Math.abs(x1 - x0);
+    dy = Math.abs(y1 - y0);
+    sx = x0 < x1 ? 1 : -1;
+    sy = y0 < y1 ? 1 : -1;
+    err = dx - dy;
+    ink(c);
+    while (true) {
+      octx.fillRect(x0, y0, 1, 1);
+      if (x0 === x1 && y0 === y1) break;
+      e2 = err << 1;
+      if (e2 > -dy) {
+        err -= dy;
+        x0 += sx;
+      }
+      if (e2 < dx) {
+        err += dx;
+        y0 += sy;
+      }
+    }
+  }
+
+  function compile(rows, yBase) {
+    var list = [];
+    var y, x, row, ch, x0, c, i, out;
+    for (y = 0; y < rows.length; y++) {
+      row = rows[y];
+      x = 0;
+      while (x < row.length) {
+        ch = row.charAt(x);
+        c = INK[ch];
+        if (!c && c !== 0) {
+          x++;
+          continue;
+        }
+        if (ch === ".") {
+          x++;
+          continue;
+        }
+        x0 = x;
+        while (x < row.length && row.charAt(x) === ch) x++;
+        list.push(x0, y + yBase, x - x0, c);
+      }
+    }
+    out = new Int16Array(list.length);
+    for (i = 0; i < list.length; i++) out[i] = list[i];
+    return out;
+  }
+
+  function drawRuns(runs, ox, oy) {
+    var i, n, c;
+    n = runs.length;
+    for (i = 0; i < n; i += 4) {
+      c = runs[i + 3];
+      ink(c);
+      octx.fillRect(ox + runs[i], oy + runs[i + 1], runs[i + 2], 1);
+    }
+  }
+
+  function buildEdge(runs) {
+    var maxX = new Int16Array(48);
+    var has = new Uint8Array(48);
+    var i, y, x, n, p, out;
+    for (i = 0; i < 48; i++) maxX[i] = -999;
+    for (i = 0; i < runs.length; i += 4) {
+      y = runs[i + 1];
+      if (y < 0 || y >= 48) continue;
+      x = runs[i] + runs[i + 2] - 1;
+      if (x > maxX[y]) maxX[y] = x;
+      has[y] = 1;
+    }
+    n = 0;
+    for (y = 0; y < 48; y++) if (has[y]) n++;
+    out = new Int16Array(n * 2);
+    p = 0;
+    for (y = 0; y < 48; y++) {
+      if (!has[y]) continue;
+      out[p++] = maxX[y];
+      out[p++] = y;
+    }
+    return out;
+  }
+
+  function buildRobeRim() {
+    var i, y, x, w, nHi, nLo, pHi, pLo;
+    nHi = 0;
+    nLo = 0;
+    for (i = 0; i < ROBE_ROWS.length; i += 3) {
+      if (ROBE_ROWS[i] >= 22) nLo++;
+      else nHi++;
+    }
+    rimRobeHi = new Int16Array(nHi * 2);
+    rimRobeLo = new Int16Array(nLo * 2);
+    pHi = 0;
+    pLo = 0;
+    for (i = 0; i < ROBE_ROWS.length; i += 3) {
+      y = ROBE_ROWS[i];
+      x = ROBE_ROWS[i + 1];
+      w = ROBE_ROWS[i + 2];
+      if (y >= 22) {
+        rimRobeLo[pLo++] = x + w - 1;
+        rimRobeLo[pLo++] = y;
+      } else {
+        rimRobeHi[pHi++] = x + w - 1;
+        rimRobeHi[pHi++] = y;
+      }
+    }
+  }
+
+  function paintRim(list, ox, oy) {
+    var i, n, x, y, col, gate;
+    if (!list) return;
+    n = list.length;
+    gate = glow >= 3 ? 1 : glow === 2 ? 2 : 4;
+    col = glow >= 3 ? COL_WHITE : glow === 2 ? COL_CYAN : 23;
+    for (i = 0; i < n; i += 2) {
+      x = list[i];
+      y = list[i + 1];
+      if (((x + y) & (gate - 1)) !== 0) continue;
+      if (glow >= 2 && ((x + tick) & 7) === 0) col = COL_WHITE;
+      else if (glow >= 3) col = COL_CYAN;
+      else if (glow === 2) col = COL_CYAN;
+      else col = 23;
+      if (glow >= 3 && ((x + y + tick) & 3) === 0) col = COL_WHITE;
+      px(ox + x, oy + y, col);
+    }
+  }
+
+  function fillBand(ctx, y, h, c) {
+    ctx.fillStyle = PAL[c];
+    ctx.fillRect(0, y, LW, h);
+  }
+
+  function buildBg() {
+    var x, y, r, d, c, i;
+    fillBand(bctx, 0, LH, 0);
+    fillBand(bctx, 78, 4, 1);
+    fillBand(bctx, 82, FLOOR - 82, 2);
+
+    r = 6;
+    for (y = -r; y <= r; y++) {
+      for (x = -r; x <= r; x++) {
+        d = x * x + y * y;
+        if (d > r * r) continue;
+        c = x < -1 ? 5 : 4;
+        if (d >= r * r - 4 && x > 1 && y < -1) c = 6;
+        bctx.fillStyle = PAL[c];
+        bctx.fillRect(108 + x, 16 + y, 1, 1);
+      }
+    }
+    bctx.fillStyle = PAL[5];
+    bctx.fillRect(110, 15, 2, 1);
+    bctx.fillRect(110, 16, 1, 1);
+    bctx.fillRect(105, 19, 2, 1);
+    bctx.fillRect(106, 20, 1, 1);
+
+    bctx.fillStyle = PAL[0];
+    bctx.fillRect(0, FLOOR, LW, LH - FLOOR);
+    bctx.fillStyle = PAL[7];
+    bctx.fillRect(0, FLOOR, LW, 1);
+    bctx.fillStyle = PAL[1];
+    for (i = 6; i < LW; i += 18) {
+      bctx.fillRect(i, FLOOR + 2, 1, 2);
+    }
+  }
+
+  function drawStars() {
+    var i, ph, col, n;
+    n = SX.length;
+    for (i = 0; i < n; i++) {
+      ph = (tick + SP[i] * 13) % 96;
+      if (SP[i] & 1) {
+        if (ph > 88) continue;
+        col = ph > 74 ? COL_WHITE : 7;
+      } else {
+        col = ph < 14 ? COL_WHITE : 7;
+      }
+      px(SX[i], SY[i], col);
+      if ((i === 4 || i === 7) && col === COL_WHITE) px(SX[i] + 1, SY[i], 7);
+    }
+  }
+
+  function drawRobe() {
+    var i, y, x, w, ox, inner, nD, nL, nM;
+    for (i = 0; i < ROBE_ROWS.length; i += 3) {
+      y = ROBE_ROWS[i];
+      x = ROBE_ROWS[i + 1];
+      w = ROBE_ROWS[i + 2];
+      ox = originX + x;
+      if (y >= 22) ox += swayPx;
+      inner = w - 2;
+      if (inner < 1) continue;
+      rect(ox, originY + y, 1, 1, COL_OUT);
+      rect(ox + w - 1, originY + y, 1, 1, COL_OUT);
+      if (y >= 27) {
+        rect(ox + 1, originY + y, inner, 1, COL_ROBE_D);
+        continue;
+      }
+      nD = (inner * 3) / 10 | 0;
+      nL = (inner * 28) / 100 | 0;
+      if (nD < 1) nD = 1;
+      if (nL < 1) nL = 1;
+      nM = inner - nD - nL;
+      if (nM < 1) {
+        nM = 1;
+        if (nD > 1) nD--;
+        else nL--;
+      }
+      rect(ox + 1, originY + y, nD, 1, COL_ROBE_D);
+      rect(ox + 1 + nD, originY + y, nM, 1, COL_ROBE);
+      rect(ox + 1 + nD + nM, originY + y, nL, 1, COL_ROBE_L);
+    }
+  }
+
+  function drawBoots() {
+    var x, y;
+    x = originX + swayPx;
+    y = originY;
+    rect(x + 6, y + 28, 4, 1, COL_OUT);
+    rect(x + 7, y + 28, 2, 1, COL_WOOD_D);
+    rect(x + 13, y + 28, 4, 1, COL_OUT);
+    rect(x + 14, y + 28, 2, 1, COL_WOOD_D);
+    rect(x + 6, y + 29, 4, 2, COL_WOOD_D);
+    rect(x + 13, y + 29, 4, 2, COL_WOOD_D);
+    rect(x + 6, y + 30, 4, 1, COL_OUT);
+    rect(x + 13, y + 30, 4, 1, COL_OUT);
+  }
+
+  function drawGem() {
+    px(gemX, gemY - 1, gemC);
+    px(gemX - 1, gemY, gemC);
+    px(gemX + 1, gemY, gemC);
+    px(gemX, gemY + 1, gemC);
+    px(gemX, gemY, COL_WHITE);
+    if (glow > 0) {
+      px(gemX - 2, gemY, COL_CYAN);
+      px(gemX + 2, gemY, COL_CYAN);
+      px(gemX, gemY - 2, COL_CYAN);
+      px(gemX, gemY + 2, 23);
+    }
+    if (glow >= 3) {
+      px(gemX - 2, gemY - 1, COL_WHITE);
+      px(gemX + 2, gemY - 1, COL_WHITE);
+      px(gemX - 1, gemY - 2, COL_WHITE);
+      px(gemX + 1, gemY - 2, COL_WHITE);
+    }
+  }
+
+  function drawDiamond(cx, cy, rad, col) {
+    var y, w;
+    if (rad < 1) return;
+    ink(col);
+    for (y = -rad; y <= rad; y++) {
+      w = rad - (y < 0 ? -y : y);
+      octx.fillRect(cx - w, cy + y, w + w + 1, 1);
+    }
+  }
+
+  function drawWizard() {
+    stroke(buttX, buttY, handX, handY, COL_WOOD_D);
+    stroke(buttX + staffNx, buttY + staffNy, handX + staffNx, handY + staffNy, COL_WOOD);
+    drawRobe();
+    drawBoots();
+    drawRuns(beardRuns, beardX, originY);
+    drawRuns(blink ? blinkRuns : faceRuns, faceX, originY);
+    drawRuns(hatRuns, hatX, originY);
+    stroke(handX, handY, gemX, gemY, COL_WOOD_D);
+    stroke(handX + staffNx, handY + staffNy, gemX + staffNx, gemY + staffNy, COL_WOOD);
+    px(bandX, bandY, COL_GOLD);
+    px(bandX + staffNx, bandY + staffNy, COL_GOLD);
+    stroke(shoulderX, shoulderY, handX, handY, COL_OUT);
+    stroke(shoulderX + staffNx, shoulderY, handX + staffNx, handY, COL_ROBE);
+    rect(handX - 1, handY - 1, 3, 3, COL_OUT);
+    rect(handX, handY, 2, 2, COL_SKIN);
+    paintRim(rimHat, hatX, originY);
+    paintRim(rimRobeHi, originX, originY);
+    paintRim(rimRobeLo, originX + swayPx, originY);
+    drawGem();
+  }
+
+  function drawBolt() {
+    var x, y;
+    if (!boltOn) return;
+    x = boltX | 0;
+    y = boltY | 0;
+    px(x, y, COL_WHITE);
+    px(x - 1, y, COL_WHITE);
+    px(x, y - 1, COL_CYAN);
+    px(x, y + 1, COL_CYAN);
+    px(x - 2, y, COL_CYAN);
+    px(x - 3, y, 21);
+    px(x - 4, y, 21);
+    px(x - 5, y, 22);
+    px(x - 6, y + 1, 22);
+    px(x - 7, y, 23);
+  }
+
+  function drawParticles() {
+    var i, t, ci, x, y, c;
+    for (i = 0; i < POOL; i++) {
+      if (mode[i] === 0) continue;
+      t = 1 - plife[i] / pmax[i];
+      if (t < 0) t = 0;
+      if (t > 1) t = 1;
+      ci = (t * 4) | 0;
+      if (ci > 4) ci = 4;
+      c = COLSEQ[ci];
+      x = pxx[i] | 0;
+      y = pyy[i] | 0;
+      px(x, y, c);
+      if (mode[i] === 1 || ci < 2) {
+        px(x + 1, y, c);
+        px(x, y + 1, c);
+      }
+    }
+  }
+
+  function ease(u, kind) {
+    if (u < 0) u = 0;
+    if (u > 1) u = 1;
+    if (kind === 2) return 1 - (1 - u) * (1 - u);
+    return u * u * (3 - 2 * u);
+  }
+
+  function enterState(next) {
+    staff0 = staff;
+    arm0 = arm;
+    tilt0 = tilt;
+    sway0 = sway;
+    bob0 = bob;
+    beard0 = beard;
+    state = next;
+    stateTick = 0;
+    if (next === ST_CHARGE) {
+      tStaff = -0.58;
+      tArm = 1;
+      tTilt = 1;
+      tSway = 0;
+      tBob = -1;
+      tBeard = 0;
+    } else if (next === ST_CAST) {
+      tStaff = -0.16;
+      tArm = 1;
+      tTilt = 1;
+      tSway = 1;
+      tBob = -1;
+      tBeard = 0;
+      beginCast();
+    } else if (next === ST_RECOVER) {
+      tStaff = -1.5;
+      tArm = 0;
+      tTilt = 0;
+      tSway = 0;
+      tBob = 0;
+      tBeard = 0;
+    }
+  }
+
+  function updatePose() {
+    var fr, u, kind;
+    if (state === ST_IDLE) {
+      fr = (stateTick / 30) & 1;
+      staff = fr ? -1.62 : -1.5;
+      arm = 0;
+      tilt = 0;
+      sway = fr ? -1 : 0;
+      bob = fr ? -1 : 0;
+      beard = fr ? 1 : 0;
+      blink = (stateTick % 150) > 142 ? 1 : 0;
+      gemC = 21;
+      glow = 0;
+      burstR = 0;
+      return;
+    }
+    blink = 0;
+    kind = state === ST_CAST ? 2 : 1;
+    u = ease(stateTick / DUR[state], kind);
+    staff = staff0 + (tStaff - staff0) * u;
+    arm = arm0 + (tArm - arm0) * u;
+    tilt = tilt0 + (tTilt - tilt0) * u;
+    sway = sway0 + (tSway - sway0) * u;
+    bob = bob0 + (tBob - bob0) * u;
+    beard = beard0 + (tBeard - beard0) * u;
+    if (state === ST_CHARGE) {
+      fr = (tick >> 2) & 3;
+      gemC = fr === 0 ? COL_WHITE : fr === 1 ? COL_CYAN : fr === 2 ? 21 : 22;
+      glow = 1 + ((tick >> 3) & 1);
+      burstR = 0;
+    } else if (state === ST_CAST) {
+      gemC = stateTick < 8 ? COL_WHITE : COL_CYAN;
+      glow = stateTick < 14 ? 3 : 2;
+      burstR = stateTick < 6 ? 4 : stateTick < 12 ? 2 : 0;
+    } else {
+      gemC = stateTick < 24 ? COL_CYAN : 21;
+      glow = stateTick < 28 ? 1 : 0;
+      burstR = 0;
+    }
+  }
+
+  function place() {
+    var ax, ay, dx, dy, adx, ady;
+    originX = 30;
+    originY = 53 + Math.round(bob);
+    hatX = originX + Math.round(tilt * 2);
+    faceX = originX + Math.round(tilt);
+    beardX = originX + Math.round(tilt) + Math.round(beard);
+    swayPx = Math.round(sway);
+    ax = arm;
+    if (ax < 0) ax = 0;
+    if (ax > 1) ax = 1;
+    handX = originX + Math.round(18 + (15 - 18) * ax);
+    handY = originY + Math.round(21 + (6 - 21) * ax);
+    shoulderX = originX + 13;
+    shoulderY = originY + 16;
+    gemX = handX + Math.round(Math.cos(staff) * 16);
+    gemY = handY + Math.round(Math.sin(staff) * 16);
+    buttX = handX + Math.round(Math.cos(staff + Math.PI) * 8);
+    buttY = handY + Math.round(Math.sin(staff + Math.PI) * 8);
+    bandX = handX + Math.round(Math.cos(staff) * 13);
+    bandY = handY + Math.round(Math.sin(staff) * 13);
+    dx = gemX - handX;
+    dy = gemY - handY;
+    adx = dx < 0 ? -dx : dx;
+    ady = dy < 0 ? -dy : dy;
+    if (adx > ady) {
+      staffNx = 0;
+      staffNy = 1;
+    } else {
+      staffNx = 1;
+      staffNy = 0;
+    }
+  }
+
+  function firstFree() {
+    var i;
+    for (i = 0; i < POOL; i++) {
+      if (mode[i] === 0) return i;
+    }
+    return -1;
+  }
+
+  function spawnOrbit() {
+    var i, a;
+    i = firstFree();
+    if (i < 0) return;
+    a = Math.random() * 6.283185307179586;
+    mode[i] = 1;
+    pang[i] = a;
+    prad[i] = 12 + Math.random() * 6;
+    pvx[i] = 0.1 + Math.random() * 0.1;
+    pvy[i] = 0;
+    plife[i] = 64;
+    pmax[i] = 64;
+    pxx[i] = gemX + Math.cos(a) * prad[i];
+    pyy[i] = gemY + Math.sin(a) * prad[i];
+  }
+
+  function spawnFly(x, y, vx, vy, life) {
+    var i;
+    i = firstFree();
+    if (i < 0) return;
+    mode[i] = 2;
+    pxx[i] = x;
+    pyy[i] = y;
+    pvx[i] = vx;
+    pvy[i] = vy;
+    plife[i] = life;
+    pmax[i] = life;
+    pang[i] = 0;
+    prad[i] = 0;
+  }
+
+  function beginCast() {
+    var i, a, sp, n;
+    boltOn = 1;
+    boltX = gemX;
+    boltY = gemY;
+    n = 0;
+    for (i = 0; i < POOL; i++) {
+      if (mode[i] !== 1) continue;
+      a = pang[i];
+      sp = 0.65 + (i % 4) * 0.22;
+      pvx[i] = Math.cos(a) * sp;
+      pvy[i] = Math.sin(a) * sp;
+      mode[i] = 2;
+      plife[i] = 26;
+      pmax[i] = 26;
+    }
+    for (i = 0; i < 18; i++) {
+      a = i * 0.34906585;
+      sp = 0.5 + (i % 5) * 0.18;
+      spawnFly(gemX, gemY, Math.cos(a) * sp, Math.sin(a) * sp, 20 + (i % 4) * 2);
+    }
+  }
+
+  function impact() {
+    var i, a, sp;
+    impactT = 8;
+    impactX = boltX | 0;
+    impactY = boltY | 0;
+    for (i = 0; i < 10; i++) {
+      a = i * 0.62831853;
+      sp = 0.4 + (i % 3) * 0.2;
+      spawnFly(impactX, impactY, Math.cos(a) * sp, Math.sin(a) * sp, 16);
+    }
+  }
+
+  function updateShake() {
+    var a, m;
+    shx = 0;
+    shy = 0;
+    if (state !== ST_CAST) return;
+    a = stateTick;
+    if (a > 16) return;
+    m = a < 8 ? 2 : 1;
+    shx = (a & 1) ? m : -m;
+    shy = (a & 2) ? 1 : 0;
+    if (a & 4) shy = -1;
+  }
+
+  function updateBolt() {
+    if (!boltOn) return;
+    boltX += 2.25;
+    if ((tick & 3) === 0) {
+      spawnFly(boltX, boltY, -0.15, ((tick >> 2) & 1) ? 0.12 : -0.12, 10);
+    }
+    if (boltX >= 122) {
+      boltOn = 0;
+      impact();
+    }
+  }
+
+  function updateParticles() {
+    var i, a;
+    if (state === ST_CHARGE && stateTick > 4 && (tick % 3) === 0) spawnOrbit();
+    for (i = 0; i < POOL; i++) {
+      if (mode[i] === 0) continue;
+      if (mode[i] === 1) {
+        pang[i] += pvx[i];
+        prad[i] -= 0.22;
+        a = pang[i];
+        pxx[i] = gemX + Math.cos(a) * prad[i];
+        pyy[i] = gemY + Math.sin(a) * prad[i];
+        plife[i] -= 1;
+        if (prad[i] < 1.4 || plife[i] <= 0) mode[i] = 0;
+      } else {
+        pxx[i] += pvx[i];
+        pyy[i] += pvy[i];
+        pvy[i] += 0.02;
+        plife[i] -= 1;
+        if (plife[i] <= 0) mode[i] = 0;
+      }
+    }
+    if (impactT > 0) impactT -= 1;
+  }
+
+  function update() {
+    tick++;
+    if (stateTick >= DUR[state]) enterState((state + 1) & 3);
+    updatePose();
+    place();
+    updateShake();
+    updateBolt();
+    updateParticles();
+    stateTick++;
+  }
+
+  function render() {
+    var dpr, pw, ph;
+    dpr = window.devicePixelRatio || 1;
+    pw = (window.innerWidth * dpr) | 0;
+    ph = (window.innerHeight * dpr) | 0;
+    if (pw < 1) pw = 1;
+    if (ph < 1) ph = 1;
+    if (pw !== viewW || ph !== viewH) {
+      viewW = pw;
+      viewH = ph;
+      view.width = pw;
+      view.height = ph;
+      view.style.width = window.innerWidth + "px";
+      view.style.height = window.innerHeight + "px";
+      scale = (Math.min(pw / LW, ph / LH)) | 0;
+      if (scale < 1) scale = 1;
+      destX = (pw - LW * scale) >> 1;
+      destY = (ph - LH * scale) >> 1;
+    }
+
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+    octx.imageSmoothingEnabled = false;
+    ink(0);
+    pen = -1;
+    octx.fillStyle = PAL[0];
+    octx.fillRect(0, 0, LW, LH);
+    octx.setTransform(1, 0, 0, 1, shx, shy);
+    octx.imageSmoothingEnabled = false;
+    octx.drawImage(bg, 0, 0);
+    pen = -1;
+    drawStars();
+    drawWizard();
+    if (burstR > 2) drawDiamond(gemX, gemY, burstR, COL_CYAN);
+    if (burstR > 0) drawDiamond(gemX, gemY, burstR > 2 ? 2 : burstR, COL_WHITE);
+    if (impactT > 4) drawDiamond(impactX, impactY, 3, COL_CYAN);
+    else if (impactT > 0) drawDiamond(impactX, impactY, 2, 21);
+    drawParticles();
+    drawBolt();
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+
+    vctx.imageSmoothingEnabled = false;
+    vctx.webkitImageSmoothingEnabled = false;
+    vctx.fillStyle = PAL[0];
+    vctx.fillRect(0, 0, viewW, viewH);
+    vctx.drawImage(off, destX, destY, LW * scale, LH * scale);
+  }
+
+  function frame(now) {
+    var dt, steps;
+    if (lastT === 0) lastT = now;
+    dt = now - lastT;
+    lastT = now;
+    if (dt > 250) dt = 250;
+    acc += dt;
+    steps = 0;
+    while (acc >= STEP && steps < 5) {
+      update();
+      acc -= STEP;
+      steps++;
+    }
+    if (steps === 5) acc = 0;
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  function boot() {
+    var i;
+    for (i = 0; i < HAT_ART.length; i++) {
+      if (HAT_ART[i].length !== 22) throw new Error("hat " + i);
+    }
+    for (i = 0; i < FACE_ART.length; i++) {
+      if (FACE_ART[i].length !== 22) throw new Error("face " + i);
+      if (FACE_BLINK[i].length !== 22) throw new Error("blink " + i);
+    }
+    for (i = 0; i < BEARD_ART.length; i++) {
+      if (BEARD_ART[i].length !== 22) throw new Error("beard " + i);
+    }
+    hatRuns = compile(HAT_ART, 0);
+    faceRuns = compile(FACE_ART, 10);
+    blinkRuns = compile(FACE_BLINK, 10);
+    beardRuns = compile(BEARD_ART, 13);
+    rimHat = buildEdge(hatRuns);
+    buildRobeRim();
+    buildBg();
+    staff = -1.5;
+    place();
+    requestAnimationFrame(frame);
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
