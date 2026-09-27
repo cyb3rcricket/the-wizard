@@ -710,6 +710,20 @@
           noise.stop(now + 0.25);
         }
       }
+
+      dispose() {
+        this.stopChargeVoice();
+        if (this.ctx) {
+          try {
+            this.ctx.close();
+          } catch (e) {}
+          this.ctx = null;
+        }
+        this.enabled = false;
+        this.masterGain = null;
+        this.windGain = null;
+        this.cachedNoiseBuffer = null;
+      }
     }
 
     const audio = new ProceduralAudioEngine();
@@ -850,8 +864,8 @@
         return tex;
       },
 
-      // Weathered Ancient Flagstone Altar Surface (Subdued, coherent variation)
-      createStoneTexture: function () {
+      // Weathered Ancient Flagstone Altar Surface (Subdued, coherent variation, large scale)
+      createDaisStoneTexture: function () {
         const size = 512;
         const canvas = document.createElement('canvas');
         canvas.width = size;
@@ -859,23 +873,24 @@
         const ctx = canvas.getContext('2d');
 
         // Dark muted slate base
-        ctx.fillStyle = '#212235';
+        ctx.fillStyle = '#212338';
         ctx.fillRect(0, 0, size, size);
 
-        // Coherent, broad stone slabs (larger scale, subdued mortar lines)
-        const tileSize = 128;
-        for (let y = 0; y < size; y += tileSize) {
-          const shift = (y / tileSize) % 2 === 0 ? 0 : tileSize / 2;
+        // Coherent broad stone slabs (large scale, subdued mortar lines, low checker contrast)
+        const tileSize = 170;
+        for (let y = 0; y < size + tileSize; y += tileSize) {
+          const shift = (Math.floor(y / tileSize) % 2 === 0) ? 0 : tileSize * 0.5;
           for (let x = -shift; x < size + tileSize; x += tileSize) {
             const seed = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
-            const shade = Math.floor(30 + (seed - Math.floor(seed)) * 18);
-            ctx.fillStyle = `rgb(${shade}, ${shade + 3}, ${shade + 12})`;
-            ctx.fillRect(x + 2, y + 2, tileSize - 4, tileSize - 4);
+            const frac = seed - Math.floor(seed);
+            const shade = Math.floor(32 + frac * 14);
+            ctx.fillStyle = `rgb(${shade}, ${shade + 3}, ${shade + 10})`;
+            ctx.fillRect(x + 3, y + 3, tileSize - 6, tileSize - 6);
 
             // Subtle beveled edge highlight
-            ctx.strokeStyle = `rgba(140, 160, 200, 0.10)`;
+            ctx.strokeStyle = 'rgba(130, 150, 190, 0.08)';
             ctx.lineWidth = 1;
-            ctx.strokeRect(x + 2, y + 2, tileSize - 4, tileSize - 4);
+            ctx.strokeRect(x + 3, y + 3, tileSize - 6, tileSize - 6);
           }
         }
 
@@ -883,7 +898,7 @@
         const imgData = ctx.getImageData(0, 0, size, size);
         const data = imgData.data;
         for (let i = 0; i < data.length; i += 4) {
-          const n = (rng.next() - 0.5) * 14;
+          const n = (rng.next() - 0.5) * 12;
           data[i] = Math.min(255, Math.max(0, data[i] + n));
           data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + n));
           data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + n + 2));
@@ -893,7 +908,158 @@
         const tex = new THREE.CanvasTexture(canvas);
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
-        tex.repeat.set(3, 3);
+        tex.repeat.set(2.5, 2.5);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = 4;
+        return tex;
+      },
+
+      createStoneTexture: function () {
+        return this.createDaisStoneTexture();
+      },
+
+      // Vertical Masonry Stone Texture for Columns, Ruins and Cliff Rim
+      createMasonryStoneTexture: function () {
+        const size = 512;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        // Base muted indigo slate
+        ctx.fillStyle = '#202236';
+        ctx.fillRect(0, 0, size, size);
+
+        // Staggered horizontal masonry courses with vertical grain
+        const courseH = 64;
+        const blockW = 128;
+        for (let y = 0; y < size; y += courseH) {
+          const shift = (Math.floor(y / courseH) % 2 === 0) ? 0 : blockW * 0.5;
+          for (let x = -shift; x < size + blockW; x += blockW) {
+            const seed = Math.sin(x * 23.456 + y * 91.123) * 31415.9265;
+            const frac = seed - Math.floor(seed);
+            const shade = Math.floor(28 + frac * 16);
+            ctx.fillStyle = `rgb(${shade}, ${shade + 4}, ${shade + 12})`;
+            ctx.fillRect(x + 2, y + 2, blockW - 4, courseH - 4);
+
+            // Subtle vertical fluting / weathering grain lines
+            ctx.strokeStyle = 'rgba(120, 140, 180, 0.05)';
+            ctx.lineWidth = 1;
+            for (let g = 8; g < blockW - 4; g += 16) {
+              ctx.beginPath();
+              ctx.moveTo(x + 2 + g, y + 2);
+              ctx.lineTo(x + 2 + g, y + courseH - 2);
+              ctx.stroke();
+            }
+
+            // Course joint shadow & bevel highlight
+            ctx.strokeStyle = 'rgba(10, 12, 22, 0.4)';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x + 2, y + 2, blockW - 4, courseH - 4);
+          }
+        }
+
+        // Soft grain overlay
+        const imgData = ctx.getImageData(0, 0, size, size);
+        const data = imgData.data;
+        for (let i = 0; i < data.length; i += 4) {
+          const n = (rng.next() - 0.5) * 10;
+          data[i] = Math.min(255, Math.max(0, data[i] + n));
+          data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + n));
+          data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + n + 1));
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(2, 4);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = 4;
+        return tex;
+      },
+
+      // Soft Masked Noise Mist Texture (Phase 8.6 requirement: zero rectangular edges)
+      createMistTexture: function () {
+        const size = 512;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        ctx.clearRect(0, 0, size, size);
+
+        // Multi-octave organic soft billowing cloud patches
+        const numPuffs = 48;
+        for (let i = 0; i < numPuffs; i++) {
+          const angle = rng.next() * Math.PI * 2;
+          const dist = rng.next() * 150;
+          const px = cx + Math.cos(angle) * dist;
+          const py = cy + Math.sin(angle) * dist;
+          const r = 50 + rng.next() * 70;
+
+          const grad = ctx.createRadialGradient(px, py, 4, px, py, r);
+          grad.addColorStop(0, 'rgba(80, 120, 185, 0.22)');
+          grad.addColorStop(0.45, 'rgba(50, 80, 140, 0.12)');
+          grad.addColorStop(1, 'rgba(20, 35, 70, 0)');
+
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(px, py, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Smooth radial edge mask ensuring absolute 0 alpha at perimeter
+        const imgData = ctx.getImageData(0, 0, size, size);
+        const data = imgData.data;
+        for (let y = 0; y < size; y++) {
+          for (let x = 0; x < size; x++) {
+            const dx = x - cx;
+            const dy = y - cy;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            // Smooth hermite falloff from radius 140 to 230
+            const mask = dist < 140 ? 1.0 : (dist > 230 ? 0.0 : Math.cos(((dist - 140) / 90) * Math.PI * 0.5));
+            const idx = (y * size + x) * 4;
+            data[idx + 3] = Math.floor(data[idx + 3] * mask);
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+      },
+
+      // Soft Radial Billboard Moon Halo Texture (Phase 8.7 requirement)
+      createMoonHaloTexture: function () {
+        const size = 512;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        ctx.clearRect(0, 0, size, size);
+
+        // Smooth exponential radial glow falloff
+        const grad = ctx.createRadialGradient(cx, cy, 30, cx, cy, 240);
+        grad.addColorStop(0, 'rgba(120, 165, 235, 0.42)');
+        grad.addColorStop(0.25, 'rgba(90, 135, 210, 0.28)');
+        grad.addColorStop(0.55, 'rgba(50, 85, 160, 0.12)');
+        grad.addColorStop(0.85, 'rgba(25, 45, 100, 0.03)');
+        grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 245, 0, Math.PI * 2);
+        ctx.fill();
+
+        const tex = new THREE.CanvasTexture(canvas);
         tex.colorSpace = THREE.SRGBColorSpace;
         return tex;
       },
@@ -906,7 +1072,7 @@
         const ctx = canvas.getContext('2d');
 
         // Pearlescent silver/lunar base (restrained luminance to avoid blowing out bloom)
-        ctx.fillStyle = '#b8cde8';
+        ctx.fillStyle = '#a8bedc';
         ctx.fillRect(0, 0, size, size);
 
         // Dark basalt plains (maria)
@@ -916,9 +1082,9 @@
           const my = (Math.cos(i * 7.1) * 0.4 + 0.5) * size;
           const rad = 40 + (i % 5) * 25;
           const grad = ctx.createRadialGradient(mx, my, 5, mx, my, rad);
-          grad.addColorStop(0, 'rgba(95, 115, 145, 0.55)');
-          grad.addColorStop(0.7, 'rgba(120, 138, 168, 0.28)');
-          grad.addColorStop(1, 'rgba(184, 205, 232, 0)');
+          grad.addColorStop(0, 'rgba(85, 105, 135, 0.55)');
+          grad.addColorStop(0.7, 'rgba(105, 125, 155, 0.28)');
+          grad.addColorStop(1, 'rgba(168, 190, 220, 0)');
           ctx.fillStyle = grad;
           ctx.beginPath();
           ctx.arc(mx, my, rad, 0, Math.PI * 2);
@@ -931,13 +1097,13 @@
           const cy = rng.next() * size;
           const r = 4 + rng.next() * 18;
 
-          ctx.strokeStyle = 'rgba(230, 240, 255, 0.45)';
+          ctx.strokeStyle = 'rgba(215, 230, 250, 0.45)';
           ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.arc(cx, cy, r, -Math.PI * 0.7, Math.PI * 0.3);
           ctx.stroke();
 
-          ctx.fillStyle = 'rgba(70, 85, 112, 0.35)';
+          ctx.fillStyle = 'rgba(65, 80, 105, 0.35)';
           ctx.beginPath();
           ctx.arc(cx, cy, r - 1.2, 0, Math.PI * 2);
           ctx.fill();
@@ -2663,7 +2829,7 @@
     }
 
     // =========================================================================
-    // 4. ENVIRONMENT & TARGET MONOLITH BUILDER (Phases 1 & 2)
+    // 4. ENVIRONMENT & TARGET MONOLITH BUILDER (Phases 1, 2 & 8)
     // =========================================================================
     class EnvironmentBuilder {
       constructor(scene) {
@@ -2674,62 +2840,240 @@
         this.monolithLight = null;
         this.targetMonolith = null;
         this.mistPlanes = [];
+        this.mistImpulse = 0.0;
         this.starsMesh = null;
+        this.starUniforms = { uTime: { value: 0 } };
+        this.moonMesh = null;
+        this.moonHaloMesh = null;
+        this.daisStoneTex = null;
+        this.masonryStoneTex = null;
         this.stoneTex = null;
         this.runeTex = null;
         this.localRuneTex = null;
         this.moonTex = null;
+        this.moonHaloTex = null;
+        this.mistTex = null;
+        this.rockButtresses = [];
+        this.ridgeBands = [];
+        this.disposables = [];
 
         this.buildEnvironment();
       }
 
+      // Helper: Irregular craggy mountain ridge band geometry (Phase 8.5)
+      createRidgeBandGeometry(dist, angleSpan, numSegs, baseHeight, minHeight, maxHeight, dipAngle, dipWidth, seedOffset) {
+        const geo = new THREE.BufferGeometry();
+        const positions = [];
+        const indices = [];
+
+        for (let i = 0; i <= numSegs; i++) {
+          const t = i / numSegs;
+          const angle = -angleSpan * 0.5 + t * angleSpan;
+          const r = dist + Math.sin(t * 7.0 + seedOffset) * (dist * 0.06);
+
+          // Craggy profile with multi-frequency harmonics
+          let h = minHeight + (maxHeight - minHeight) * (
+            0.50 +
+            0.32 * Math.sin(t * 13.0 + seedOffset) +
+            0.18 * Math.cos(t * 27.0 + seedOffset * 1.5)
+          );
+
+          // Dip around dipAngle (preserves clean moon negative space)
+          const dAngle = Math.abs(angle - dipAngle);
+          if (dAngle < dipWidth) {
+            const dip = Math.sin((dAngle / dipWidth) * Math.PI * 0.5);
+            h = minHeight + (h - minHeight) * (0.30 + 0.70 * dip);
+          }
+
+          const x = Math.sin(angle) * r;
+          const z = -Math.cos(angle) * r;
+
+          // Bottom vertex
+          positions.push(x, baseHeight, z);
+          // Top vertex
+          positions.push(x, h, z);
+
+          if (i < numSegs) {
+            const b = i * 2;
+            indices.push(b, b + 1, b + 2);
+            indices.push(b + 2, b + 1, b + 3);
+          }
+        }
+
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geo.setIndex(indices);
+        geo.computeVertexNormals();
+        this.disposables.push(geo);
+        return geo;
+      }
+
+      // Helper: Broken column shaft with diagonal shear and jagged chipped fracture (Phase 8.3)
+      createBrokenShaftGeometry(rTop, rBot, height, radialSegs = 12) {
+        const geo = new THREE.BufferGeometry();
+        const positions = [];
+        const indices = [];
+
+        // Bottom ring at y = 0
+        for (let i = 0; i <= radialSegs; i++) {
+          const theta = (i / radialSegs) * Math.PI * 2;
+          const x = Math.cos(theta) * rBot;
+          const z = Math.sin(theta) * rBot;
+          positions.push(x, 0, z);
+        }
+
+        // Top fractured ring with diagonal shear & chipped fracture
+        for (let i = 0; i <= radialSegs; i++) {
+          const theta = (i / radialSegs) * Math.PI * 2;
+          const x = Math.cos(theta) * rTop;
+          const z = Math.sin(theta) * rTop;
+          const shear = Math.cos(theta + 0.4) * 0.35 * height;
+          const notch = (i % 3 === 0) ? -0.16 * height : 0.05 * height;
+          const y = height + shear + notch;
+          positions.push(x, y, z);
+        }
+
+        const ringOffset = radialSegs + 1;
+
+        // Side quads
+        for (let i = 0; i < radialSegs; i++) {
+          const b0 = i;
+          const b1 = i + 1;
+          const t0 = ringOffset + i;
+          const t1 = ringOffset + i + 1;
+          indices.push(b0, t0, b1);
+          indices.push(b1, t0, t1);
+        }
+
+        // Top jagged cap (fan from centroid)
+        const centerTopIdx = positions.length / 3;
+        let sumY = 0;
+        for (let i = 0; i < radialSegs; i++) {
+          sumY += positions[(ringOffset + i) * 3 + 1];
+        }
+        positions.push(0, sumY / radialSegs + 0.04 * height, 0);
+
+        for (let i = 0; i < radialSegs; i++) {
+          indices.push(centerTopIdx, ringOffset + i, ringOffset + i + 1);
+        }
+
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geo.setIndex(indices);
+        geo.computeVertexNormals();
+        this.disposables.push(geo);
+        return geo;
+      }
+
+      // Helper: Fractured capital block with sheared / broken corner (Phase 8.3)
+      createFracturedCapGeometry(width, height, depth) {
+        const geo = new THREE.BoxGeometry(width, height, depth, 2, 1, 2);
+        const pos = geo.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+          const x = pos.getX(i);
+          const y = pos.getY(i);
+          const z = pos.getZ(i);
+          if (x > 0.2 * width && z > 0.2 * depth) {
+            pos.setY(i, y - height * 0.45);
+            pos.setX(i, x - width * 0.25);
+            pos.setZ(i, z - depth * 0.25);
+          }
+        }
+        geo.computeVertexNormals();
+        this.disposables.push(geo);
+        return geo;
+      }
+
       buildEnvironment() {
-        // --- 1. Ancient Stone Altar Dais ---
-        this.stoneTex = Textures.createStoneTexture();
-        const matAltar = new THREE.MeshStandardMaterial({
-          map: this.stoneTex,
-          roughness: 0.88,
+        // --- 1. Ancient Stone Altar Dais & Masonry (Phase 8.2 & 8.4) ---
+        this.daisStoneTex = Textures.createDaisStoneTexture();
+        this.stoneTex = this.daisStoneTex; // Backward compatibility alias
+        this.masonryStoneTex = Textures.createMasonryStoneTexture();
+
+        const matDais = new THREE.MeshStandardMaterial({
+          map: this.daisStoneTex,
+          roughness: 0.90,
+          metalness: 0.02,
+          color: 0x8a93b0
+        });
+        this.disposables.push(matDais);
+
+        const matMasonry = new THREE.MeshStandardMaterial({
+          map: this.masonryStoneTex,
+          roughness: 0.86,
           metalness: 0.02,
           color: 0x8892af
         });
+        this.disposables.push(matMasonry);
 
-        // Stepped Circular Dais (Radius 11.5, Height 1.2)
+        // Stepped Circular Dais (Radius 11.5, Height 1.2) - Clean central performance surface
         const daisGeo = new THREE.CylinderGeometry(11.5, 12.8, 1.2, 32);
-        const daisMesh = new THREE.Mesh(daisGeo, matAltar);
+        this.disposables.push(daisGeo);
+        const daisMesh = new THREE.Mesh(daisGeo, matDais);
         daisMesh.position.set(0, -0.6, 0);
         daisMesh.receiveShadow = true;
         this.scene.add(daisMesh);
 
         // Lower Stepped Rim Base
         const baseGeo = new THREE.CylinderGeometry(13.5, 14.5, 1.4, 32);
-        const baseMesh = new THREE.Mesh(baseGeo, matAltar);
+        this.disposables.push(baseGeo);
+        const baseMesh = new THREE.Mesh(baseGeo, matDais);
         baseMesh.position.set(0, -1.8, 0);
         baseMesh.receiveShadow = true;
         this.scene.add(baseMesh);
 
         // Mountain Cliff Foundation
-        const cliffGeo = new THREE.CylinderGeometry(14.8, 26.0, 5.0, 16);
+        const cliffGeo = new THREE.CylinderGeometry(14.8, 26.0, 5.0, 24);
+        this.disposables.push(cliffGeo);
         const matCliff = new THREE.MeshStandardMaterial({
           color: 0x141626,
-          roughness: 0.92,
-          metalness: 0.05,
+          roughness: 0.94,
+          metalness: 0.04,
           flatShading: true
         });
+        this.disposables.push(matCliff);
         const cliffMesh = new THREE.Mesh(cliffGeo, matCliff);
         cliffMesh.position.set(0, -4.6, 0);
         cliffMesh.receiveShadow = true;
         this.scene.add(cliffMesh);
+
+        // Phase 8.2: Asymmetric low-detail rocky masses breaking the conical silhouette
+        const buttressConfigs = [
+          { angle: 0.35, r: 15.6, y: -4.2, scale: [3.8, 4.2, 2.8], rot: [0.15, 0.4, -0.2] },
+          { angle: 1.45, r: 16.2, y: -4.6, scale: [4.2, 4.6, 3.2], rot: [-0.2, 1.1, 0.15] },
+          { angle: 2.50, r: 15.2, y: -3.8, scale: [3.4, 3.8, 2.6], rot: [0.1, -0.6, 0.25] },
+          { angle: 3.65, r: 16.8, y: -4.8, scale: [4.4, 4.5, 3.4], rot: [0.25, 0.8, -0.1] },
+          { angle: 4.75, r: 15.8, y: -4.0, scale: [3.6, 4.0, 2.9], rot: [-0.15, -1.2, 0.2] },
+          { angle: 5.80, r: 16.4, y: -4.5, scale: [4.0, 4.4, 3.0], rot: [0.18, 0.3, -0.25] }
+        ];
+
+        const rockGeo = new THREE.DodecahedronGeometry(1.6, 0);
+        this.disposables.push(rockGeo);
+
+        buttressConfigs.forEach((cfg) => {
+          const rockMesh = new THREE.Mesh(rockGeo, matCliff);
+          rockMesh.position.set(
+            Math.cos(cfg.angle) * cfg.r,
+            cfg.y,
+            Math.sin(cfg.angle) * cfg.r
+          );
+          rockMesh.scale.set(cfg.scale[0], cfg.scale[1], cfg.scale[2]);
+          rockMesh.rotation.set(cfg.rot[0], cfg.rot[1], cfg.rot[2]);
+          rockMesh.receiveShadow = true;
+          this.scene.add(rockMesh);
+          this.rockButtresses.push(rockMesh);
+        });
 
         // --- 2. Carved Mystical Runic Circle Floor (Restrained Opacity per Phase 2) ---
         this.runeTex = Textures.createRuneDisc();
         const matRunes = new THREE.MeshBasicMaterial({
           map: this.runeTex,
           transparent: true,
-          opacity: 0.22, // Subdued so broad floor does not overpower wizard
+          opacity: 0.22,
           blending: THREE.AdditiveBlending,
           depthWrite: false
         });
+        this.disposables.push(matRunes);
         const runeGeo = new THREE.PlaneGeometry(16, 16);
+        this.disposables.push(runeGeo);
         this.runesMesh = new THREE.Mesh(runeGeo, matRunes);
         this.runesMesh.rotation.x = -Math.PI / 2;
         this.runesMesh.position.set(0, 0.015, 0);
@@ -2744,46 +3088,112 @@
           blending: THREE.AdditiveBlending,
           depthWrite: false
         });
+        this.disposables.push(matLocalRunes);
         const localRuneGeo = new THREE.PlaneGeometry(6.4, 6.4);
+        this.disposables.push(localRuneGeo);
         this.localRunesMesh = new THREE.Mesh(localRuneGeo, matLocalRunes);
         this.localRunesMesh.rotation.x = -Math.PI / 2;
         this.localRunesMesh.position.set(-4.5, 0.02, 0.0);
         this.scene.add(this.localRunesMesh);
 
-        // --- 3. Weathered Ancient Ruin Columns ---
-        const columnGeo = new THREE.CylinderGeometry(0.7, 0.8, 6.5, 8);
-        const columnPositions = [
-          { x: -9.5, z: -5.5, h: 5.8, rot: 0.08 },
-          { x: -5.5, z: -9.2, h: 6.5, rot: -0.05 },
-          { x: 1.0,  z: -10.5, h: 7.5, rot: 0.04 },
-          { x: 7.5,  z: -8.8, h: 5.2, rot: 0.12 },
-          { x: 10.5, z: -4.5, h: 6.0, rot: -0.08 },
-          { x: -11.0, z: 3.5, h: 4.2, rot: -0.15 },
-          { x: 11.8,  z: 4.5, h: 3.8, rot: 0.18 }
+        // --- 3. Compact Ruin Kit & Deliberate Placement (Phase 8.1 & 8.3) ---
+        // Kit elements: Intact shaft, broken shaft, intact cap, fractured cap, fallen drum
+        const shaftIntactGeo = new THREE.CylinderGeometry(0.70, 0.78, 1.0, 12);
+        this.disposables.push(shaftIntactGeo);
+
+        const capIntactGeo = new THREE.BoxGeometry(1.6, 0.35, 1.6);
+        this.disposables.push(capIntactGeo);
+
+        const capNeckGeo = new THREE.CylinderGeometry(0.85, 0.72, 0.25, 12);
+        this.disposables.push(capNeckGeo);
+
+        const shaftBroken1Geo = this.createBrokenShaftGeometry(0.70, 0.78, 3.6, 12);
+        const shaftBroken2Geo = this.createBrokenShaftGeometry(0.70, 0.78, 4.4, 12);
+        const capFracturedGeo = this.createFracturedCapGeometry(1.6, 0.35, 1.6);
+
+        // Deliberate placement:
+        // Clear window behind wizard (between x = -9.2 and -0.8) preserves clean silhouette,
+        // face, distinctive hat bend, raised hand, and projectile corridor in all primary views.
+        const ruinPlacements = [
+          // Far Left Anchor (Intact)
+          { type: 'intact', x: -10.5, z: -5.2, h: 5.4, rot: 0.06 },
+          // Mid Left Flank (Broken shaft - positioned left of wizard profile)
+          { type: 'broken1', x: -9.2, z: -7.8, h: 3.6, rot: -0.08 },
+          // Center-Back Stately Column (Intact - frames negative space between wizard and stage center)
+          { type: 'intact', x: 0.0, z: -10.5, h: 6.8, rot: 0.03 },
+          // Center-Right Stately Column (Intact)
+          { type: 'intact', x: 4.2, z: -9.6, h: 7.2, rot: -0.04 },
+          // Right Broken Ruin (Broken shaft with fractured cap nearby)
+          { type: 'broken2', x: 8.5, z: -8.2, h: 4.4, rot: 0.09 },
+          // Far Right Flank Anchor behind monolith (Intact)
+          { type: 'intact', x: 13.0, z: -4.5, h: 5.5, rot: -0.06 },
+          // Low Perimeter Stumps (grounding stage rim, height <= 1.6, well below eye/spell level)
+          { type: 'stump', x: -11.2, z: 3.2, h: 1.6, rot: -0.10 },
+          { type: 'stump', x: 12.2, z: 4.0, h: 1.5, rot: 0.12 }
         ];
 
-        columnPositions.forEach((cp) => {
-          const colMesh = new THREE.Mesh(columnGeo, matAltar);
-          colMesh.scale.y = cp.h / 6.5;
-          colMesh.position.set(cp.x, cp.h / 2 - 0.2, cp.z);
-          colMesh.rotation.z = cp.rot;
-          colMesh.castShadow = true;
-          colMesh.receiveShadow = true;
-          this.scene.add(colMesh);
+        ruinPlacements.forEach((rp) => {
+          if (rp.type === 'intact') {
+            const shaft = new THREE.Mesh(shaftIntactGeo, matMasonry);
+            shaft.scale.set(1.0, rp.h, 1.0);
+            shaft.position.set(rp.x, rp.h / 2 - 0.2, rp.z);
+            shaft.rotation.z = rp.rot;
+            shaft.castShadow = true;
+            shaft.receiveShadow = true;
+            this.scene.add(shaft);
 
-          const capGeo = new THREE.BoxGeometry(1.6, 0.35, 1.6);
-          const capMesh = new THREE.Mesh(capGeo, matAltar);
-          capMesh.position.set(cp.x, cp.h + 0.1, cp.z);
-          capMesh.rotation.z = cp.rot;
-          capMesh.castShadow = true;
-          this.scene.add(capMesh);
+            // Molded neck trim
+            const neck = new THREE.Mesh(capNeckGeo, matMasonry);
+            neck.position.set(rp.x, rp.h - 0.25, rp.z);
+            neck.rotation.z = rp.rot;
+            neck.castShadow = true;
+            this.scene.add(neck);
+
+            // Capital abacus
+            const cap = new THREE.Mesh(capIntactGeo, matMasonry);
+            cap.position.set(rp.x, rp.h + 0.05, rp.z);
+            cap.rotation.z = rp.rot;
+            cap.castShadow = true;
+            this.scene.add(cap);
+          } else if (rp.type === 'broken1') {
+            const shaft = new THREE.Mesh(shaftBroken1Geo, matMasonry);
+            shaft.position.set(rp.x, -0.2, rp.z);
+            shaft.rotation.z = rp.rot;
+            shaft.castShadow = true;
+            shaft.receiveShadow = true;
+            this.scene.add(shaft);
+          } else if (rp.type === 'broken2') {
+            const shaft = new THREE.Mesh(shaftBroken2Geo, matMasonry);
+            shaft.position.set(rp.x, -0.2, rp.z);
+            shaft.rotation.z = rp.rot;
+            shaft.castShadow = true;
+            shaft.receiveShadow = true;
+            this.scene.add(shaft);
+
+            // Fractured capital resting tilted at base
+            const cap = new THREE.Mesh(capFracturedGeo, matMasonry);
+            cap.position.set(rp.x + 0.7, 0.26, rp.z + 0.6);
+            cap.rotation.set(0.28, 0.45, -0.32);
+            cap.castShadow = true;
+            cap.receiveShadow = true;
+            this.scene.add(cap);
+          } else if (rp.type === 'stump') {
+            const stump = new THREE.Mesh(shaftIntactGeo, matMasonry);
+            stump.scale.set(1.0, rp.h, 1.0);
+            stump.position.set(rp.x, rp.h / 2 - 0.2, rp.z);
+            stump.rotation.z = rp.rot;
+            stump.castShadow = true;
+            stump.receiveShadow = true;
+            this.scene.add(stump);
+          }
         });
 
-        // Weathered Fallen Column Drum
-        const fallenGeo = new THREE.CylinderGeometry(0.7, 0.75, 2.2, 8);
-        const fallenMesh = new THREE.Mesh(fallenGeo, matAltar);
-        fallenMesh.position.set(-2.5, 0.45, 9.2);
-        fallenMesh.rotation.set(0.1, 0.4, Math.PI / 2);
+        // Weathered Fallen Column Drum on Southern Perimeter
+        const fallenDrumGeo = new THREE.CylinderGeometry(0.72, 0.76, 2.2, 12);
+        this.disposables.push(fallenDrumGeo);
+        const fallenMesh = new THREE.Mesh(fallenDrumGeo, matMasonry);
+        fallenMesh.position.set(-1.5, 0.42, 9.4);
+        fallenMesh.rotation.set(0.08, 0.35, Math.PI / 2);
         fallenMesh.castShadow = true;
         fallenMesh.receiveShadow = true;
         this.scene.add(fallenMesh);
@@ -2794,12 +3204,14 @@
         this.scene.add(this.targetMonolith);
 
         const monoGeo = new THREE.CylinderGeometry(0.8, 1.5, 7.5, 6);
+        this.disposables.push(monoGeo);
         const matMono = new THREE.MeshStandardMaterial({
           color: 0x363b52,
           roughness: 0.82,
           metalness: 0.05,
           flatShading: true
         });
+        this.disposables.push(matMono);
         const monoMesh = new THREE.Mesh(monoGeo, matMono);
         monoMesh.position.y = 3.75;
         monoMesh.castShadow = true;
@@ -2809,12 +3221,14 @@
         // Glowing Arcane Ward Sigils on Monolith Face
         for (let i = 0; i < 4; i++) {
           const wardGeo = new THREE.TorusGeometry(0.35 + i * 0.15, 0.03, 4, 8);
+          this.disposables.push(wardGeo);
           const matWard = new THREE.MeshStandardMaterial({
             color: 0x00f0ff,
             emissive: 0x00d4ff,
             emissiveIntensity: 1.2,
             roughness: 0.2
           });
+          this.disposables.push(matWard);
           const wardMesh = new THREE.Mesh(wardGeo, matWard);
           wardMesh.position.set(-0.95, 2.5 + i * 0.9, 0);
           wardMesh.rotation.y = Math.PI / 2;
@@ -2827,59 +3241,68 @@
         this.monolithLight.position.set(-1.0, 3.5, 0);
         this.targetMonolith.add(this.monolithLight);
 
-        // --- 5. Massive Radiant Moon ---
+        // --- 5. Massive Radiant Moon & Soft Billboard Halo (Phase 8.7) ---
         this.moonTex = Textures.createMoonTexture();
-        const moonGeo = new THREE.SphereGeometry(7.5, 32, 32);
+        const moonGeo = new THREE.SphereGeometry(7.2, 32, 32);
+        this.disposables.push(moonGeo);
         const matMoon = new THREE.MeshBasicMaterial({
           map: this.moonTex,
-          color: 0xddeaff
+          color: 0xc8daf2 // Subdued luminance below bloom threshold 1.15 to avoid sustained moon bloom
         });
-        const moonMesh = new THREE.Mesh(moonGeo, matMoon);
-        moonMesh.position.set(-8.5, 15.5, -36.0);
-        this.scene.add(moonMesh);
+        this.disposables.push(matMoon);
+        this.moonMesh = new THREE.Mesh(moonGeo, matMoon);
+        this.moonMesh.position.set(-8.5, 17.2, -36.0);
+        this.scene.add(this.moonMesh);
 
-        // Soft Moon Atmospheric Halo
-        const haloGeo = new THREE.SphereGeometry(8.6, 32, 32);
+        // Soft Radial Billboard Halo (Phase 8.7 requirement: eliminates hard spherical shell)
+        this.moonHaloTex = Textures.createMoonHaloTexture();
+        const haloGeo = new THREE.PlaneGeometry(28, 28);
+        this.disposables.push(haloGeo);
         const matHalo = new THREE.MeshBasicMaterial({
-          color: 0x608ad8,
+          map: this.moonHaloTex,
           transparent: true,
-          opacity: 0.18,
+          opacity: 0.40,
           blending: THREE.AdditiveBlending,
-          side: THREE.BackSide
+          depthWrite: false,
+          depthTest: true
         });
-        const haloMesh = new THREE.Mesh(haloGeo, matHalo);
-        haloMesh.position.copy(moonMesh.position);
-        this.scene.add(haloMesh);
+        this.disposables.push(matHalo);
+        this.moonHaloMesh = new THREE.Mesh(haloGeo, matHalo);
+        this.moonHaloMesh.position.set(-8.5, 17.2, -35.8);
+        this.scene.add(this.moonHaloMesh);
 
-        // --- 6. Distant Mountain Silhouette Ranges ---
-        const mountainMats = [
-          new THREE.MeshBasicMaterial({ color: 0x121428 }),
-          new THREE.MeshBasicMaterial({ color: 0x090a16 })
+        // --- 6. Atmospheric Mountain Ridge Bands (Phase 8.5) ---
+        // Irregular low-detail ridge bands with atmospheric distance separation
+        // Dips at angle -0.23 rad protect moon negative space
+        const ridgeConfigs = [
+          // Band 1: Midground Ridge (distance 56)
+          { dist: 56, span: 2.1, segs: 32, base: -14, minH: 5.5, maxH: 14.0, dipA: -0.23, dipW: 0.28, seed: 1.2, color: 0x15182e },
+          // Band 2: Distant Ridge (distance 88)
+          { dist: 88, span: 2.3, segs: 36, base: -20, minH: 10.0, maxH: 22.0, dipA: -0.23, dipW: 0.32, seed: 4.8, color: 0x0e1122 },
+          // Band 3: Deep Horizon Ridge (distance 135)
+          { dist: 135, span: 2.5, segs: 40, base: -25, minH: 5.0, maxH: 12.0, dipA: -0.23, dipW: 0.35, seed: 8.5, color: 0x080914 }
         ];
 
-        for (let m = 0; m < 2; m++) {
-          const numPeaks = 9;
-          const dist = m === 0 ? 55 : 85;
-          const yBase = m === 0 ? -12 : -18;
-          for (let p = 0; p < numPeaks; p++) {
-            const peakGeo = new THREE.ConeGeometry(14 + p * 3, 26 + (p % 4) * 8, 4);
-            const peakMesh = new THREE.Mesh(peakGeo, mountainMats[m]);
-            const angle = ((p - numPeaks / 2) * 0.28);
-            peakMesh.position.set(
-              Math.sin(angle) * dist,
-              yBase + (p % 3) * 3,
-              -Math.cos(angle) * dist
-            );
-            peakMesh.rotation.y = p * 0.8;
-            this.scene.add(peakMesh);
-          }
-        }
+        ridgeConfigs.forEach((rc) => {
+          const rGeo = this.createRidgeBandGeometry(
+            rc.dist, rc.span, rc.segs, rc.base, rc.minH, rc.maxH, rc.dipA, rc.dipW, rc.seed
+          );
+          const rMat = new THREE.MeshBasicMaterial({ color: rc.color, side: THREE.DoubleSide });
+          this.disposables.push(rMat);
+          const rMesh = new THREE.Mesh(rGeo, rMat);
+          this.scene.add(rMesh);
+          this.ridgeBands.push(rMesh);
+        });
 
-        // --- 7. Twinkling Starfield ---
+        // --- 7. Twinkling Starfield in ONE Points Draw (Phase 8.8) ---
         const starCount = 1400;
         const starGeo = new THREE.BufferGeometry();
+        this.disposables.push(starGeo);
+
         const starPositions = new Float32Array(starCount * 3);
         const starColors = new Float32Array(starCount * 3);
+        const starPhases = new Float32Array(starCount);
+        const starBrightnesses = new Float32Array(starCount);
 
         const paletteStars = [
           new THREE.Color(0xffffff),
@@ -2901,39 +3324,104 @@
           starColors[i * 3] = col.r;
           starColors[i * 3 + 1] = col.g;
           starColors[i * 3 + 2] = col.b;
+
+          // Stable individual phase and brightness (Phase 8.8)
+          starPhases[i] = rng.next() * Math.PI * 2;
+          starBrightnesses[i] = 0.45 + rng.next() * 0.55;
         }
 
         starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
         starGeo.setAttribute('color', new THREE.BufferAttribute(starColors, 3));
+        starGeo.setAttribute('aPhase', new THREE.BufferAttribute(starPhases, 1));
+        starGeo.setAttribute('aBrightness', new THREE.BufferAttribute(starBrightnesses, 1));
 
         const matStar = new THREE.PointsMaterial({
-          size: 1.3,
+          size: 1.4,
           vertexColors: true,
           transparent: true,
-          opacity: 0.82,
+          opacity: 0.85,
           map: Textures.createSparkleSprite(),
           blending: THREE.AdditiveBlending,
-          depthWrite: false
+          depthWrite: false,
+          fog: false
         });
+        this.disposables.push(matStar);
+
+        // Custom shader for individual phased twinkling in ONE draw call
+        matStar.onBeforeCompile = (shader) => {
+          shader.uniforms.uTime = this.starUniforms.uTime;
+          shader.vertexShader = `
+            attribute float aPhase;
+            attribute float aBrightness;
+            varying float vTwinkle;
+            uniform float uTime;
+          ` + shader.vertexShader;
+
+          shader.vertexShader = shader.vertexShader.replace(
+            '#include <begin_vertex>',
+            `#include <begin_vertex>
+            float tw = aBrightness * (0.65 + 0.35 * sin(uTime * 1.8 + aPhase));
+            vTwinkle = tw;
+            `
+          );
+
+          shader.vertexShader = shader.vertexShader.replace(
+            'gl_PointSize = size;',
+            `gl_PointSize = size * (0.75 + 0.35 * sin(uTime * 1.8 + aPhase));`
+          );
+
+          shader.fragmentShader = `
+            varying float vTwinkle;
+          ` + shader.fragmentShader;
+
+          shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <map_particle_fragment>',
+            `#include <map_particle_fragment>
+            diffuseColor.a *= vTwinkle;
+            `
+          );
+        };
+
         this.starsMesh = new THREE.Points(starGeo, matStar);
         this.scene.add(this.starsMesh);
 
-        // --- 8. Ground Mist Layers ---
-        for (let i = 0; i < 3; i++) {
-          const mistGeo = new THREE.PlaneGeometry(36, 36);
-          const matMist = new THREE.MeshBasicMaterial({
-            color: 0x141e38,
-            transparent: true,
-            opacity: 0.10 - i * 0.025,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false
-          });
-          const mistPlane = new THREE.Mesh(mistGeo, matMist);
-          mistPlane.rotation.x = -Math.PI / 2;
-          mistPlane.position.set(0, 0.1 + i * 0.35, 0);
-          this.scene.add(mistPlane);
-          this.mistPlanes.push(mistPlane);
-        }
+        // --- 8. Soft Masked Ground Mist Layers (Phase 8.6) ---
+        // Soft circular masked noise patches positioned below and behind stage.
+        // No large rectangular edges, depthWrite: false, depthTest: true.
+        this.mistTex = Textures.createMistTexture();
+        const matMist = new THREE.MeshBasicMaterial({
+          map: this.mistTex,
+          color: 0x304870,
+          transparent: true,
+          opacity: 0.11,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          depthTest: true
+        });
+        this.disposables.push(matMist);
+
+        const mistConfigs = [
+          // Deep Abyss Layer below cliff
+          { x: 0, y: -4.0, z: -2, size: 48, rot: 0.2 },
+          // Lower Canyon Drift below stage
+          { x: -3.0, y: -2.5, z: -4, size: 40, rot: -0.4 },
+          // Midground Behind Ruins (well behind wizard at z = -9)
+          { x: 1.0, y: 0.1, z: -9.0, size: 32, rot: 0.5 },
+          // Target Flank Swirl
+          { x: 8.5, y: -0.4, z: -6.5, size: 28, rot: -0.2 }
+        ];
+
+        mistConfigs.forEach((cfg) => {
+          const mGeo = new THREE.PlaneGeometry(cfg.size, cfg.size);
+          this.disposables.push(mGeo);
+          const mMesh = new THREE.Mesh(mGeo, matMist);
+          mMesh.rotation.x = -Math.PI / 2;
+          mMesh.rotation.z = cfg.rot;
+          mMesh.position.set(cfg.x, cfg.y, cfg.z);
+          mMesh.userData.baseY = cfg.y;
+          this.scene.add(mMesh);
+          this.mistPlanes.push(mMesh);
+        });
       }
 
       getStrikeTarget(outVec = new THREE.Vector3()) {
@@ -2948,21 +3436,29 @@
         if (this.runesMesh) {
           this.runesMesh.rotation.z += 0.04 * simDt;
           const baseAlpha = 0.18 + 0.04 * Math.sin(time * 2.0);
-          this.runesMesh.material.opacity = baseAlpha; // Broad dais remains quiet and subordinate
+          this.runesMesh.material.opacity = baseAlpha;
         }
 
         if (this.localRunesMesh) {
           this.localRunesMesh.rotation.z -= 0.06 * simDt;
-          this.localRunesMesh.material.opacity = floorRuneResponse; // Localized gradient response near wizard
+          this.localRunesMesh.material.opacity = floorRuneResponse;
         }
 
+        // Starfield individual phased twinkling (Phase 8.8)
+        this.starUniforms.uTime.value = time;
+
+        // Mist subtle UV drift and brief impact displacement ripple (Phase 8.6)
+        if (this.mistTex) {
+          this.mistTex.offset.x += 0.005 * simDt;
+          this.mistTex.offset.y += 0.003 * simDt;
+        }
+
+        const ripple = this.mistImpulse * 0.06;
         this.mistPlanes.forEach((plane, idx) => {
-          plane.rotation.z += (0.015 + idx * 0.01) * simDt;
+          plane.rotation.z += (0.012 + idx * 0.005) * simDt;
+          const baseY = plane.userData.baseY !== undefined ? plane.userData.baseY : plane.position.y;
+          plane.position.y = baseY + Math.sin(time * 12.0 + idx) * ripple;
         });
-
-        if (this.starsMesh) {
-          this.starsMesh.material.size = 1.2 + 0.25 * Math.sin(time * 3.5);
-        }
       }
 
       triggerImpactFlash() {
@@ -2973,6 +3469,8 @@
         this.monolithRunes.forEach((r) => {
           r.material.emissiveIntensity = 8.5;
         });
+        // Brief impact reaction in mist (Phase 8.6)
+        this.mistImpulse = 1.0;
       }
 
       decayImpactLight(dt) {
@@ -2986,17 +3484,24 @@
             r.material.emissiveIntensity = 1.2 + (r.material.emissiveIntensity - 1.2) * decay;
           }
         });
+        // Decay mist impulse
+        this.mistImpulse *= Math.exp(-4.2 * dt);
+        if (this.mistImpulse < 0.001) this.mistImpulse = 0.0;
       }
 
       dispose() {
-        if (this.stoneTex) this.stoneTex.dispose();
+        if (this.daisStoneTex) this.daisStoneTex.dispose();
+        if (this.masonryStoneTex) this.masonryStoneTex.dispose();
         if (this.runeTex) this.runeTex.dispose();
         if (this.localRuneTex) this.localRuneTex.dispose();
         if (this.moonTex) this.moonTex.dispose();
-        if (this.localRunesMesh) {
-          if (this.localRunesMesh.geometry) this.localRunesMesh.geometry.dispose();
-          if (this.localRunesMesh.material) this.localRunesMesh.material.dispose();
-        }
+        if (this.moonHaloTex) this.moonHaloTex.dispose();
+        if (this.mistTex) this.mistTex.dispose();
+
+        this.disposables.forEach((item) => {
+          if (item && item.dispose) item.dispose();
+        });
+        this.disposables = [];
       }
     }
 
@@ -4030,7 +4535,7 @@
       }
 
       initMouseControls() {
-        const onDown = (e) => {
+        this.onDown = (e) => {
           this.isDragging = true;
           this.prevMouse.x = e.clientX;
           this.prevMouse.y = e.clientY;
@@ -4039,7 +4544,7 @@
           }
         };
 
-        const onMove = (e) => {
+        this.onMove = (e) => {
           if (!this.isDragging) return;
           const dx = e.clientX - this.prevMouse.x;
           const dy = e.clientY - this.prevMouse.y;
@@ -4051,21 +4556,28 @@
           this.updateOrbitPosition();
         };
 
-        const onUp = () => {
+        this.onUp = () => {
           this.isDragging = false;
         };
 
-        const onWheel = (e) => {
+        this.onWheel = (e) => {
           e.preventDefault();
           this.orbitRadius = Math.max(4, Math.min(28, this.orbitRadius + e.deltaY * 0.015));
           if (this.mode !== 'orbit') this.setPreset('orbit');
           this.updateOrbitPosition();
         };
 
-        this.domElement.addEventListener('pointerdown', onDown);
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
-        this.domElement.addEventListener('wheel', onWheel, { passive: false });
+        this.domElement.addEventListener('pointerdown', this.onDown);
+        window.addEventListener('pointermove', this.onMove);
+        window.addEventListener('pointerup', this.onUp);
+        this.domElement.addEventListener('wheel', this.onWheel, { passive: false });
+      }
+
+      dispose() {
+        if (this.onDown) this.domElement.removeEventListener('pointerdown', this.onDown);
+        if (this.onMove) window.removeEventListener('pointermove', this.onMove);
+        if (this.onUp) window.removeEventListener('pointerup', this.onUp);
+        if (this.onWheel) this.domElement.removeEventListener('wheel', this.onWheel);
       }
 
       updateOrbitPosition() {
@@ -4080,7 +4592,7 @@
         this.spellFovOffset = 0.0;
       }
 
-      setPreset(name) {
+      setPreset(name, snap = false) {
         this.mode = name;
         document.querySelectorAll('.btn-chip[data-cam]').forEach((b) => {
           b.classList.toggle('active', b.dataset.cam === name);
@@ -4119,6 +4631,15 @@
         this.spellFovOffset = 0.0;
         this.targetPos.copy(this.basePos);
         this.targetLookAt.copy(this.baseLookAt);
+
+        if (snap) {
+          this.currentPos.copy(this.targetPos);
+          this.currentLookAt.copy(this.targetLookAt);
+          this.camera.position.copy(this.currentPos);
+          this.camera.lookAt(this.currentLookAt);
+          this.camera.fov = this.baseFov;
+          this.camera.updateProjectionMatrix();
+        }
       }
 
       addTrauma(amount) {
@@ -4262,6 +4783,9 @@
           this.transitionTo(STATE_CAST);
         }
       }
+
+      get loop() { return this.autoLoop; }
+      set loop(enabled) { this.autoLoop = enabled; }
 
       setLoop(enabled) {
         this.autoLoop = enabled;
@@ -4519,6 +5043,9 @@
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
+        // Renderer stats autoReset handling across composer passes (Phase 9 requirement)
+        this.renderer.info.autoReset = false;
+
         // Color Management & ACES Tone Mapping
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -4549,6 +5076,8 @@
         this.director = new CameraDirector(this.camera, this.canvas);
         window.director = this.director;
         window.app = this;
+        this.audio = audio;
+        window.audio = audio;
 
         // Post-Processing Pipeline (Phase 1)
         this.renderMode = RENDER_MODE_COMPOSER_BLOOM_ON;
@@ -4597,6 +5126,7 @@
         window.__WIZARD_V3__ = {
           app: this,
           director: this.spellDirector,
+          audio: audio,
           getState: () => {
             const sample = this.spellDirector.sample();
             return {
@@ -4630,8 +5160,28 @@
             };
           },
           setRenderMode: (mode) => this.setRenderMode(mode),
-          step: (dt = 1/120) => this.stepSimulation(dt)
+          step: (dt = 1/120) => this.stepSimulation(dt),
+          getSceneStatistics: () => this.getSceneStatistics()
         };
+      }
+
+      getSceneStatistics() {
+        const prevReset = this.renderer.info.autoReset;
+        this.renderer.info.autoReset = false;
+        this.renderer.info.reset();
+        const prevBg = this.scene.background;
+        this.scene.background = this.directBgColor;
+        this.renderer.render(this.scene, this.camera);
+        this.scene.background = prevBg;
+        const stats = {
+          calls: this.renderer.info.render.calls,
+          triangles: this.renderer.info.render.triangles,
+          points: this.renderer.info.render.points,
+          geometries: this.renderer.info.memory.geometries,
+          textures: this.renderer.info.memory.textures
+        };
+        this.renderer.info.autoReset = prevReset;
+        return stats;
       }
 
       // Procedural PMREM Environment (Phase 2 - Provides gold specular catches without external HDRI)
@@ -4792,7 +5342,14 @@
       }
 
       initEventListeners() {
-        window.addEventListener('resize', () => this.resizeRendering());
+        this.cleanupListeners = [];
+        const addCleanListener = (target, type, listener, options) => {
+          target.addEventListener(type, listener, options);
+          this.cleanupListeners.push(() => target.removeEventListener(type, listener, options));
+        };
+
+        const onResize = () => this.resizeRendering();
+        addCleanListener(window, 'resize', onResize);
 
         const btnCast = document.getElementById('btn-cast-now');
         const triggerCast = () => {
@@ -4800,10 +5357,11 @@
           this.spellDirector.requestCast(this.characterAdapter);
         };
 
-        window.addEventListener('pointerdown', () => audio.handleUserInteraction());
-        btnCast.addEventListener('click', triggerCast);
+        const onPointerDown = () => audio.handleUserInteraction();
+        addCleanListener(window, 'pointerdown', onPointerDown);
+        if (btnCast) addCleanListener(btnCast, 'click', triggerCast);
 
-        window.addEventListener('keydown', (e) => {
+        const onKeyDown = (e) => {
           audio.handleUserInteraction();
           if (e.code === 'Space') {
             e.preventDefault();
@@ -4813,43 +5371,58 @@
           } else if (e.code === 'KeyP') {
             this.cycleRenderMode();
           }
-        });
+        };
+        addCleanListener(window, 'keydown', onKeyDown);
 
-        this.btnRenderMode.addEventListener('click', () => this.cycleRenderMode());
+        if (this.btnRenderMode) {
+          const onRenderModeClick = () => this.cycleRenderMode();
+          addCleanListener(this.btnRenderMode, 'click', onRenderModeClick);
+        }
 
         document.querySelectorAll('.btn-chip[data-cam]').forEach((btn) => {
-          btn.addEventListener('click', () => this.director.setPreset(btn.dataset.cam));
+          const onCamClick = () => this.director.setPreset(btn.dataset.cam);
+          addCleanListener(btn, 'click', onCamClick);
         });
 
         document.querySelectorAll('.btn-chip[data-speed]').forEach((btn) => {
-          btn.addEventListener('click', () => {
+          const onSpeedClick = () => {
             document.querySelectorAll('.btn-chip[data-speed]').forEach((b) => b.classList.remove('active'));
             btn.classList.add('active');
             this.timeScale = parseFloat(btn.dataset.speed);
-          });
+          };
+          addCleanListener(btn, 'click', onSpeedClick);
         });
 
         const btnLoop = document.getElementById('btn-loop');
-        btnLoop.addEventListener('click', () => {
-          this.autoLoop = !this.autoLoop;
-          btnLoop.classList.toggle('active', this.autoLoop);
-          this.spellDirector.setLoop(this.autoLoop);
-        });
+        if (btnLoop) {
+          const onLoopClick = () => {
+            this.autoLoop = !this.autoLoop;
+            btnLoop.classList.toggle('active', this.autoLoop);
+            this.spellDirector.setLoop(this.autoLoop);
+          };
+          addCleanListener(btnLoop, 'click', onLoopClick);
+        }
 
         const btnAudio = document.getElementById('btn-audio');
-        btnAudio.addEventListener('click', () => {
-          const isEnabled = audio.toggle();
-          btnAudio.textContent = isEnabled ? '🔊' : '🔇';
-          btnAudio.classList.toggle('active', isEnabled);
-        });
+        if (btnAudio) {
+          const onAudioClick = () => {
+            const isEnabled = audio.toggle();
+            btnAudio.textContent = isEnabled ? '🔊' : '🔇';
+            btnAudio.classList.toggle('active', isEnabled);
+          };
+          addCleanListener(btnAudio, 'click', onAudioClick);
+        }
 
         const btnUI = document.getElementById('btn-ui-toggle');
-        btnUI.addEventListener('click', () => {
-          document.getElementById('ui-container').classList.toggle('ui-hidden');
-        });
+        if (btnUI) {
+          const onUIClick = () => {
+            document.getElementById('ui-container').classList.toggle('ui-hidden');
+          };
+          addCleanListener(btnUI, 'click', onUIClick);
+        }
 
         // Page Visibility Handling (Phase 4 requirement)
-        document.addEventListener('visibilitychange', () => {
+        const onVisibilityChange = () => {
           const isVisible = !document.hidden;
           if (!isVisible) {
             this.accumulator = 0.0;
@@ -4859,7 +5432,8 @@
             this.accumulator = 0.0;
             audio.onVisibilityChange(true);
           }
-        });
+        };
+        addCleanListener(document, 'visibilitychange', onVisibilityChange);
       }
 
       updateUIFromSample(sample) {
@@ -4964,6 +5538,7 @@
       }
 
       renderFrame() {
+        this.renderer.info.reset();
         if (this.renderMode === RENDER_MODE_DIRECT) {
           this.scene.background = this.directBgColor;
           this.renderer.render(this.scene, this.camera);
@@ -5017,9 +5592,26 @@
       dispose() {
         if (this.animationFrameId) {
           cancelAnimationFrame(this.animationFrameId);
+          this.animationFrameId = null;
+        }
+        if (this.cleanupListeners) {
+          this.cleanupListeners.forEach((fn) => fn());
+          this.cleanupListeners = [];
+        }
+        if (this.director) {
+          this.director.dispose();
         }
         if (this.characterAdapter) {
           this.characterAdapter.dispose();
+        }
+        if (this.projectiles) {
+          this.projectiles.dispose();
+        }
+        if (this.particles) {
+          this.particles.dispose();
+        }
+        if (this.env) {
+          this.env.dispose();
         }
         if (this.composer) {
           this.composer.dispose();
@@ -5030,17 +5622,28 @@
         if (this.envTexture) {
           this.envTexture.dispose();
         }
-        if (this.particles) {
-          this.particles.dispose();
-        }
-        if (this.env) {
-          this.env.dispose();
-        }
         if (this.renderer) {
           this.renderer.dispose();
         }
+        if (audio && audio.dispose) {
+          audio.dispose();
+        }
+        if (window.__WIZARD_V3__ && window.__WIZARD_V3__.app === this) {
+          delete window.__WIZARD_V3__;
+        }
+        if (window.app === this) {
+          delete window.app;
+        }
+        if (window.director === this.director) {
+          delete window.director;
+        }
+        if (window.spellDirector === this.spellDirector) {
+          delete window.spellDirector;
+        }
       }
     }
+
+    window.App = App;
 
     // Launch Application
     window.addEventListener('DOMContentLoaded', () => {
