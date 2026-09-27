@@ -100,7 +100,7 @@ The authored character model must export cleanly from Blender into a self-contai
 | Dimension | Specification | Standard glTF Rule |
 |---|---|---|
 | **World Up Axis** | **+Y** | `+Y` is Up in both Blender glTF exporter and Three.js. |
-| **Character Forward** | **+Z** in local asset space | Facing positive Z in local space (or negative Z matching glTF camera conventions). The normalization wrapper orients the model toward world **+X** (facing the target monolith). |
+| **Character Forward** | **+Z** in local asset space | Authored wizard local forward is strictly **+Z** in Blender/asset space. Artists must NOT pre-rotate the character into world +X. The GLB normalization wrapper is responsible for rotating that local +Z forward convention into the established V3 world stance toward the target monolith at $(10.2, 3.4, 0.0)$. (Third-party or legacy assets using another forward axis require preprocessing or explicit normalization, but the production contract is strictly +Z). |
 | **Character Ground** | **Y = 0.0** at soles / robe hem | The character's feet / bottom of robe must rest precisely on the ground plane ($Y=0.0$). The origin $(0, 0, 0)$ must be positioned horizontally centered between the feet. |
 | **World Stance Position** | `(-4.5, 0.0, 0.0)` | The character stands at $(-4.5, 0, 0)$ on the dais in world space. |
 | **Root World Rotation** | Yaw = $0.44 \times \pi$ rad ($\approx 79.2^\circ$) | Three-quarter heroic spellcaster stance angled toward the monolith at $(10.2, 3.4, 0.0)$. |
@@ -117,11 +117,11 @@ wrapper.rotation.y = Math.PI * 0.44; // Align 3/4 heroic stance facing +X target
 ```
 
 1. **Auto-Centering**: If the model base is slightly offset from local $(0,0,0)$, the wrapper adjusts internal position so the ground contact sits at local $Y=0.0$.
-2. **Height Normalization**:
-   - The reference height for the procedural wizard is **3.8m** (measured from ground to the tip of the curved hat).
-   - If the authored character's bounding height deviates significantly (e.g. exported in centimeters where height is 380 units instead of 3.8), the wrapper automatically applies a uniform scale factor:
+2. **Height & Scale Normalization**:
+   - **Authored Target**: Preferred authored character height is **3.8 m ± 0.4 m** (meaning approximately **3.4 m – 4.2 m**), measured from grounded feet/robe hem to the top of the hat. This authored target range is an art/export guideline, not a requirement that forces artists to hit one exact number.
+   - **Runtime Normalization**: The runtime MAY normalize obviously different but otherwise valid authored scales using the outer normalization wrapper (e.g., if exported in centimeters where height is ~380 units instead of ~3.8 units):
      $$S = \frac{3.8}{\text{bbox.max.y} - \text{bbox.min.y}}$$
-   - If scale is already within $3.0\text{m} \le \text{height} \le 4.5\text{m}$, uniform scale remains $1.0$.
+   - For models within plausible proportions, uniform scale remains $1.0$. Extremely implausible scale (< 1.0m or > 10.0m) is warned or rejected according to the validator's existing sanity rules.
 
 ---
 
@@ -129,14 +129,14 @@ wrapper.rotation.y = Math.PI * 0.44; // Align 3/4 heroic stance facing +X target
 
 Named attachment points are empty nodes, locator objects, or dedicated bones exported within the glTF scene hierarchy.
 
-### 4.1 Required Attachments
+### 4.1 Named Attachments Contract
 
 | Attachment Name | Required | Parent / Location | Expected Coordinates (Local) | Consuming System | Failure / Fallback Behavior |
 |---|---|---|---|---|---|
 | `spell_origin` | **YES (P0)** | Child of Staff bone or Gem bone, at the geometric center of the focus crystal. | $X \approx 0.3 - 0.7$, $Y \approx 3.0 - 3.6$, $Z \approx 0.2 - 0.6$ (staff raised stance) | `ParticleEngine` (vortex anchor & release burst), `ProjectileSystem` (launch origin), `PointLight` (gem glow). | **FATAL CONTRACT BREACH.** Model rejected immediately. Procedural wizard remains active. **NEVER** launch from $(0,0,0)$ or root. |
 | `staff_grip` | **YES (P0)** | Child of Right Hand bone (`hand.R` / `RightHand`). Located at palm center. | Matches right hand palm transform. | Attaches staff geometry if exported as separate node; establishes arm-to-weapon kinematics. | Model rejected or warning issued if staff is embedded. |
-| `head` | **YES (P0)** | Child of Head bone (`head`). Located at face/eye level. | $X \approx 0.0$, $Y \approx 2.8 - 3.2$, $Z \approx 0.0 - 0.2$ | `CameraDirector` (Hero portrait framing), character accent lighting. | Falls back to bounding box center $(0, 2.8, 0)$ with warning. |
-| `camera_target` | Recommended | Child of Chest or Neck bone. Centered at upper chest / collarbone. | $X \approx 0.0$, $Y \approx 2.5 - 2.8$, $Z \approx 0.0$ | `CameraDirector` (Cinematic, Classic, and Hero look-at target). | Falls back to `head` attachment position minus $0.3\text{m}$ Y offset. |
+| `head` | **YES (P0)** | Child of Head bone (`head`). Located at face/eye level. | $X \approx 0.0$, $Y \approx 2.8 - 3.2$, $Z \approx 0.0 - 0.2$ | `CameraDirector` (Hero portrait framing), character accent lighting. | **FATAL CONTRACT BREACH.** Model rejected immediately. Procedural wizard remains active. Authored GLB requires validated `head` attachment. No bounding-box fallback. |
+| `camera_target` | **NO (Recommended)** | Child of Chest or Neck bone. Centered at upper chest / collarbone. | $X \approx 0.0$, $Y \approx 2.5 - 2.8$, $Z \approx 0.0$ | `CameraDirector` (Cinematic, Classic, and Hero look-at target). | **RECOMMENDED, not required.** Falls back to `head` attachment position minus $0.3\text{m}$ downward Y offset for framing. Asset must NOT fail validation solely because `camera_target` is absent. |
 | `somatic_hand` | Optional | Child of Left Hand bone (`hand.L` / `LeftHand`). Located at fingertips / palm. | $X \approx -0.4 - -0.8$, $Y \approx 2.0 - 2.6$, $Z \approx 0.2 - 0.5$ | Optional somatic spell charging sparks / runes. | Ignored if absent. |
 
 ### 4.2 Invariant: Missing `spell_origin` Protection
@@ -344,7 +344,7 @@ Rule 5: Animation Clips (P0)
 
 Rule 6: Bounds & Dimensions
   - Estimated triangles <= 80,000
-  - Height between 2.0m and 4.5m
+  - Height sanity check: plausible scale (sanity rejected if < 1.0m or > 10.0m; preferred authored height 3.8m ± 0.4m)
   - Base resting near ground level (y_min >= -0.5m and <= 0.5m)
 ```
 

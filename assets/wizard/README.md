@@ -23,15 +23,18 @@ Before exporting and placing a model here, consult the complete specification:
 ### Key Checklist Summary
 
 1. **Format**: Binary glTF 2.0 (`.glb`).
-2. **Coordinate System**:
-   - Y-up world orientation.
-   - Character feet grounded at `(0, 0, 0)`.
-   - Character standing height ~3.6m–4.0m (to top of hat tip).
-3. **Required Named Attachment Points**:
-   - `spell_origin`: Center of the magical gem/crystal at the staff head (where projectiles launch and vortex particles converge). **Never place at `(0,0,0)`.**
-   - `staff_grip`: Right hand socket node gripping the staff.
-   - `head`: Head center / face orientation node (for hero camera framing and rim lighting).
-   - `camera_target`: Look-at framing focus node (at chest/neck level, y ~2.6m–3.0m).
+2. **Coordinate System & Scale**:
+   - World up: `+Y`.
+   - Local authored forward: `+Z` in Blender / asset space. (The runtime normalization wrapper handles rotating this local +Z forward convention into the established V3 world stance toward the +X target monolith; artists must NOT pre-rotate the character into world +X).
+   - Character feet / robe hem grounded at local `Y = 0` (centered horizontally at `(0, 0, 0)`).
+   - Preferred authored character height: `3.8 m ± 0.4 m` (approximately `3.4 m – 4.2 m`, measured from grounded feet/robe hem to top of hat). The runtime normalization wrapper may normalize different but otherwise valid authored scales.
+3. **Named Attachment Points**:
+   - **Required Attachments (P0)** (Missing any required attachment fails validation, rejects the authored asset, and retains procedural V3; no missing required attachment silently falls back to world origin):
+     - `spell_origin`: Center of the magical gem/crystal at the staff head (where projectiles launch and vortex particles converge). **Never place at `(0,0,0)`.**
+     - `staff_grip`: Right hand socket node gripping the staff.
+     - `head`: Head center / face orientation node (for hero camera framing and rim lighting). **Required.** If missing, validation fails, authored GLB is not activated, and procedural V3 remains active.
+   - **Recommended Attachments**:
+     - `camera_target`: Look-at framing focus node (at upper chest / collarbone level, `y ~2.5m–2.8m`). **Recommended, not required.** If absent, falls back to `head` attachment position minus a documented downward Y offset (~0.3m) for framing. Asset must NOT fail validation solely because `camera_target` is absent.
 4. **Required Skeletal Animations**:
    - `idle` (looping breathing and idle stance)
    - `charge` (staff raised back, somatic hand extending)
