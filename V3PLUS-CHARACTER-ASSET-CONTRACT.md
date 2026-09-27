@@ -431,11 +431,12 @@ class GLBCharacterAdapter {
   }
 
   getGemWorldPosition(outVec) {
-    if (this.attachments.spell_origin) {
-      this.attachments.spell_origin.getWorldPosition(outVec);
-    } else {
-      outVec.set(-4.5, 3.2, 0.0);
+    // Invariant: spell_origin presence is strictly enforced by pre-validation before adapter swap.
+    // If somehow reached without spell_origin, throw an explicit error rather than silently guessing coordinates.
+    if (!this.attachments.spell_origin) {
+      throw new Error('Fatal invariant breach: GLBCharacter requires validated spell_origin attachment');
     }
+    this.attachments.spell_origin.getWorldPosition(outVec);
     return outVec;
   }
 }

@@ -18,6 +18,7 @@ Exit Codes:
 
 import sys
 import os
+import re
 import struct
 import json
 import math
@@ -34,6 +35,7 @@ REQUIRED_ATTACHMENTS = {
         "required": True,
         "description": "Center of magical crystal/gem atop staff; projectile & vortex origin",
         "min_height": 1.5,
+        "min_distance_from_origin": 0.5,
         "max_distance_from_origin": 10.0,
     },
     "staff_grip": {
@@ -58,14 +60,45 @@ REQUIRED_CLIPS = ["idle", "charge", "cast", "recover"]
 
 # Semantic Bone Mapping Targets
 SEMANTIC_BONE_KEYWORDS = {
-    "root": ["root", "origin"],
+    "root": ["root", "origin", "armature"],
     "hips": ["hip", "pelvis"],
-    "spine": ["spine", "chest", "torso"],
+    "spine": ["spine", "chest", "torso", "rib", "upperbody", "lowerbody"],
     "neck_head": ["neck", "head"],
-    "staff_arm": ["rightshoulder", "rightarm", "rightelbow", "rightforearm", "righthand", "right_hand", "hand.r", "hand_r", "upperarm_r", "lowerarm_r"],
-    "somatic_arm": ["leftshoulder", "leftarm", "leftelbow", "leftforearm", "lefthand", "left_hand", "hand.l", "hand_l", "upperarm_l", "lowerarm_l"],
-    "legs": ["thigh", "leg", "knee", "foot", "calf", "ankle", "toe"]
+    "staff_arm": [
+        "rightshoulder", "rightarm", "rightelbow", "rightforearm", "righthand", "right_hand",
+        "hand.r", "hand_r", "hand-r", "upperarm_r", "lowerarm_r", "upper_arm.r", "forearm.r",
+        "shoulder.r", "arm.r", "wrist.r", "def-upper_arm.r", "def-forearm.r", "def-hand.r"
+    ],
+    "somatic_arm": [
+        "leftshoulder", "leftarm", "leftelbow", "leftforearm", "lefthand", "left_hand",
+        "hand.l", "hand_l", "hand-l", "upperarm_l", "lowerarm_l", "upper_arm.l", "forearm.l",
+        "shoulder.l", "arm.l", "wrist.l", "def-upper_arm.l", "def-forearm.l", "def-hand.l"
+    ],
+    "legs": ["thigh", "leg", "knee", "foot", "calf", "ankle", "toe", "shin"]
 }
+
+
+# ---------------------------------------------------------------------------
+# String & Name Utilities
+# ---------------------------------------------------------------------------
+
+def get_name_words(name: str) -> List[str]:
+    """Split camelCase, PascalCase, snake_case, kebab-case, pipe, dot into lowercase words."""
+    s = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', name)
+    return [w.lower() for w in re.split(r'[^a-zA-Z0-9]+', s) if w]
+
+
+def match_clip_name(clip_name: str, req: str) -> bool:
+    """Match required animation clip against exported clip name (handles Armature|..., loops, etc.)."""
+    c = clip_name.strip()
+    req = req.lower().strip()
+    words = get_name_words(c)
+    if req in words:
+        return True
+    for w in words:
+        if w.startswith(req) or w.endswith(req):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +112,7 @@ def identity_matrix() -> List[float]:
         0.0, 0.0, 1.0, 0.0,
         0.0, 0.0, 0.0, 1.0
     ]
+
 
 def trs_to_matrix(translation: List[float], rotation: List[float], scale: List[float]) -> List[float]:
     tx, ty, tz = translation
@@ -107,6 +141,7 @@ def trs_to_matrix(translation: List[float], rotation: List[float], scale: List[f
         tx, ty, tz, 1.0
     ]
 
+
 def multiply_matrices(a: List[float], b: List[float]) -> List[float]:
     """Multiply two 4x4 column-major matrices: result = a * b"""
     result = [0.0] * 16
@@ -118,8 +153,33 @@ def multiply_matrices(a: List[float], b: List[float]) -> List[float]:
             result[col * 4 + row] = val
     return result
 
+
 def get_translation_from_matrix(m: List[float]) -> Tuple[float, float, float]:
     return (m[12], m[13], m[14])
+
+
+def transform_aabb(pmin: List[float], pmax: List[float], matrix: List[float]) -> Tuple[List[float], List[float]]:
+    """Transform an axis-aligned bounding box by a 4x4 column-major matrix and return new AABB."""
+    corners = [
+        [pmin[0], pmin[1], pmin[2]],
+        [pmin[0], pmin[1], pmax[2]],
+        [pmin[0], pmax[1], pmin[2]],
+        [pmin[0], pmax[1], pmax[2]],
+        [pmax[0], pmin[1], pmin[2]],
+        [pmax[0], pmin[1], pmax[2]],
+        [pmax[0], pmax[1], pmin[2]],
+        [pmax[0], pmax[1], pmax[2]]
+    ]
+    tmin = [float("inf")] * 3
+    tmax = [float("-inf")] * 3
+    for cx, cy, cz in corners:
+        tx = matrix[0] * cx + matrix[4] * cy + matrix[8] * cz + matrix[12]
+        ty = matrix[1] * cx + matrix[5] * cy + matrix[9] * cz + matrix[13]
+        tz = matrix[2] * cx + matrix[6] * cy + matrix[10] * cz + matrix[14]
+        for i, val in enumerate([tx, ty, tz]):
+            tmin[i] = min(tmin[i], val)
+            tmax[i] = max(tmax[i], val)
+    return tmin, tmax
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +206,8 @@ def parse_glb(file_path: str) -> Tuple[Dict[str, Any], int]:
         if version != 2:
             raise ValueError(f"Unsupported glTF version: {version} (expected version 2)")
 
-        if length != file_size:
+        # Allow minor 4-byte padding discrepancy, but guard against truncated or grossly mismatched files
+        if file_size < length or abs(length - file_size) > 4:
             raise ValueError(f"Header length mismatch: declared {length} bytes, file size is {file_size} bytes")
 
         # Read Chunk 0 (JSON)
@@ -179,15 +240,18 @@ def resolve_node_transforms(gltf: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     """Compute local and world 4x4 transforms for all nodes in the default scene."""
     nodes = gltf.get("nodes", [])
     scenes = gltf.get("scenes", [])
-    default_scene_idx = gltf.get("scene", 0)
+    default_scene_idx = gltf.get("scene")
+    if default_scene_idx is None:
+        default_scene_idx = 0
 
-    if not scenes or default_scene_idx >= len(scenes):
+    if not scenes or default_scene_idx >= len(scenes) or default_scene_idx < 0:
         return {}
 
     scene = scenes[default_scene_idx]
     root_node_indices = scene.get("nodes", [])
 
     node_transforms: Dict[int, Dict[str, Any]] = {}
+    visited = set()
 
     def get_local_matrix(node: Dict[str, Any]) -> List[float]:
         if "matrix" in node and len(node["matrix"]) == 16:
@@ -198,8 +262,9 @@ def resolve_node_transforms(gltf: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
         return trs_to_matrix(t, r, s)
 
     def traverse(node_idx: int, parent_matrix: List[float]):
-        if node_idx < 0 or node_idx >= len(nodes):
+        if node_idx < 0 or node_idx >= len(nodes) or node_idx in visited:
             return
+        visited.add(node_idx)
         node = nodes[node_idx]
         local_matrix = get_local_matrix(node)
         world_matrix = multiply_matrices(parent_matrix, local_matrix)
@@ -245,7 +310,7 @@ def validate_wizard_glb(gltf: Dict[str, Any], file_size: int, strict: bool = Fal
     report = ValidationReport()
     report.info["file_size_mb"] = round(file_size / (1024 * 1024), 2)
 
-    # 1. File Size Guardrail (< 50MB budget, > 80MB warning)
+    # 1. File Size Guardrail (< 50MB budget, > 60MB warning)
     if report.info["file_size_mb"] > 60.0:
         report.warnings.append(f"File size {report.info['file_size_mb']} MB exceeds recommended 50 MB budget")
     else:
@@ -290,10 +355,20 @@ def validate_wizard_glb(gltf: Dict[str, Any], file_size: int, strict: bool = Fal
         # Secondary alias search
         if not target_data:
             alias_map = {
-                "spell_origin": ["spellorigin", "gem_origin", "gem", "gem_socket", "staff_gem"],
-                "staff_grip": ["staffgrip", "staff_socket", "hand_r_socket", "hand.r_socket", "grip_socket"],
-                "head": ["head_socket", "head_bone", "def_head", "bip01_head"],
-                "camera_target": ["cameratarget", "focus_target", "lookat_target", "chest_focus"]
+                "spell_origin": [
+                    "spellorigin", "spell_origin", "spell-origin", "gem_origin", "gem-origin",
+                    "gem", "gem_socket", "staff_gem", "staff-gem", "crystal_origin", "focus_gem"
+                ],
+                "staff_grip": [
+                    "staffgrip", "staff_grip", "staff-grip", "staff_socket", "staff-socket",
+                    "hand_r_socket", "hand.r_socket", "grip_socket", "grip.r", "hand_r", "hand.r"
+                ],
+                "head": [
+                    "head_socket", "head_bone", "def_head", "def-head", "bip01_head", "head.001", "org-head"
+                ],
+                "camera_target": [
+                    "cameratarget", "camera_target", "camera-target", "focus_target", "lookat_target", "chest_focus"
+                ]
             }
             aliases = alias_map.get(att_name, [])
             for alias in aliases:
@@ -314,10 +389,11 @@ def validate_wizard_glb(gltf: Dict[str, Any], file_size: int, strict: bool = Fal
             # Check: spell_origin MUST NOT be at (0, 0, 0)
             if att_name == "spell_origin":
                 dist_from_origin = math.sqrt(wpos[0]**2 + wpos[1]**2 + wpos[2]**2)
-                if dist_from_origin < 0.2:
+                min_dist = spec.get("min_distance_from_origin", 0.5)
+                if dist_from_origin < min_dist:
                     report.fatal_errors.append(
                         f"CRITICAL CONTRACT BREACH: 'spell_origin' node ({target_data['name']}) "
-                        f"is positioned at {wpos} (too close to origin). "
+                        f"is positioned at {wpos} (distance {dist_from_origin:.2f} < {min_dist}m from origin). "
                         "Spell origin must be placed at the staff gem tip (y >= 1.5)."
                     )
                 elif wpos[1] < spec.get("min_height", 1.5):
@@ -379,12 +455,9 @@ def validate_wizard_glb(gltf: Dict[str, Any], file_size: int, strict: bool = Fal
     if not animations:
         report.fatal_errors.append("No animation clips found in GLB. Contract requires ['idle', 'charge', 'cast', 'recover'].")
     else:
-        # Check required clips
-        clip_lower = [c.lower() for c in clip_names]
         missing_clips = []
         for req in REQUIRED_CLIPS:
-            # Match exact or prefix/suffix (e.g., "Wizard_Idle", "Armature|idle")
-            matched = any(req == c or req in c.split("|") or req in c.split("_") for c in clip_lower)
+            matched = any(match_clip_name(c, req) for c in clip_names)
             if not matched:
                 missing_clips.append(req)
 
@@ -405,25 +478,57 @@ def validate_wizard_glb(gltf: Dict[str, Any], file_size: int, strict: bool = Fal
     total_vertices = 0
     global_min = [float("inf"), float("inf"), float("inf")]
     global_max = [float("-inf"), float("-inf"), float("-inf")]
+    found_instanced_mesh = False
 
+    # Accumulate vertex count and triangle count across all meshes
     for mesh in meshes:
         for prim in mesh.get("primitives", []):
             attrs = prim.get("attributes", {})
             pos_acc_idx = attrs.get("POSITION")
-            if pos_acc_idx is not None and pos_acc_idx < len(accessors):
+            if pos_acc_idx is not None and 0 <= pos_acc_idx < len(accessors):
                 pos_acc = accessors[pos_acc_idx]
                 total_vertices += pos_acc.get("count", 0)
-                pmin = pos_acc.get("min")
-                pmax = pos_acc.get("max")
-                if pmin and pmax:
-                    for i in range(3):
-                        global_min[i] = min(global_min[i], pmin[i])
-                        global_max[i] = max(global_max[i], pmax[i])
 
             indices_idx = prim.get("indices")
-            if indices_idx is not None and indices_idx < len(accessors):
+            if indices_idx is not None and 0 <= indices_idx < len(accessors):
                 ind_acc = accessors[indices_idx]
                 total_triangles += ind_acc.get("count", 0) // 3
+            elif pos_acc_idx is not None and 0 <= pos_acc_idx < len(accessors):
+                # Non-indexed primitives (mode 4 / triangles default: 3 vertices per triangle)
+                total_triangles += accessors[pos_acc_idx].get("count", 0) // 3
+
+    # Compute scene-space bounding box by transforming instanced mesh bounds by node world matrices
+    for nidx, data in node_transforms.items():
+        node = data.get("raw_node", {})
+        if "mesh" in node:
+            mesh_idx = node["mesh"]
+            if 0 <= mesh_idx < len(meshes):
+                mesh = meshes[mesh_idx]
+                mat = data["world_matrix"]
+                for prim in mesh.get("primitives", []):
+                    pos_idx = prim.get("attributes", {}).get("POSITION")
+                    if pos_idx is not None and 0 <= pos_idx < len(accessors):
+                        pmin = accessors[pos_idx].get("min")
+                        pmax = accessors[pos_idx].get("max")
+                        if pmin and pmax:
+                            found_instanced_mesh = True
+                            tmin, tmax = transform_aabb(pmin, pmax, mat)
+                            for i in range(3):
+                                global_min[i] = min(global_min[i], tmin[i])
+                                global_max[i] = max(global_max[i], tmax[i])
+
+    # Fallback to local accessor bounds if no mesh node is instanced in default scene
+    if not found_instanced_mesh:
+        for mesh in meshes:
+            for prim in mesh.get("primitives", []):
+                pos_idx = prim.get("attributes", {}).get("POSITION")
+                if pos_idx is not None and 0 <= pos_idx < len(accessors):
+                    pmin = accessors[pos_idx].get("min")
+                    pmax = accessors[pos_idx].get("max")
+                    if pmin and pmax:
+                        for i in range(3):
+                            global_min[i] = min(global_min[i], pmin[i])
+                            global_max[i] = max(global_max[i], pmax[i])
 
     report.info["total_vertices"] = total_vertices
     report.info["estimated_triangles"] = total_triangles
@@ -445,7 +550,7 @@ def validate_wizard_glb(gltf: Dict[str, Any], file_size: int, strict: bool = Fal
             "height": round(dy, 2)
         }
 
-        # Check height sanity (expected ~2.5m - 4.5m)
+        # Check height sanity (expected ~2.0m - 4.5m)
         if dy < 1.0:
             report.fatal_errors.append(f"Character height {dy:.2f}m is absurdly small (< 1.0m). Check export scale.")
         elif dy > 10.0:
