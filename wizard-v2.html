@@ -1,0 +1,2662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>The Wizard V2 - 3D Arcane Chronicle</title>
+  <style>
+    :root {
+      --bg-color: #060511;
+      --accent-cyan: #00f0ff;
+      --accent-gold: #ffbe3b;
+      --accent-magenta: #e03875;
+      --panel-bg: rgba(10, 8, 24, 0.78);
+      --panel-border: rgba(0, 240, 255, 0.35);
+      --font-family: 'Cinzel', 'Trajan Pro', 'Georgia', serif;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: var(--bg-color);
+      font-family: var(--font-family);
+      color: #e5ebff;
+    }
+
+    #webgl-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      z-index: 1;
+      cursor: grab;
+    }
+
+    #webgl-canvas:active {
+      cursor: grabbing;
+    }
+
+    /* Cinematic Vignette Overlay */
+    .vignette {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      pointer-events: none;
+      background: radial-gradient(circle at center, transparent 45%, rgba(4, 3, 12, 0.6) 80%, rgba(2, 1, 8, 0.92) 100%);
+      box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.7);
+    }
+
+    /* UI Overlay */
+    #ui-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 24px 30px;
+      transition: opacity 0.35s ease;
+    }
+
+    .ui-hidden {
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+
+    /* Header Bar */
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      pointer-events: auto;
+    }
+
+    .title-group {
+      text-shadow: 0 0 15px rgba(0, 240, 255, 0.5), 0 2px 6px #000;
+    }
+
+    .title-group h1 {
+      font-size: 26px;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      font-weight: 700;
+      background: linear-gradient(135deg, #ffffff 20%, #9beaff 60%, #00e1ff 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .title-group p {
+      font-size: 12px;
+      letter-spacing: 2px;
+      color: #9cb2db;
+      margin-top: 4px;
+      font-style: italic;
+    }
+
+    /* State Badge */
+    .state-badge-container {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 30px;
+      padding: 8px 18px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 15px rgba(0, 240, 255, 0.2);
+    }
+
+    .state-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #7388aa;
+      box-shadow: 0 0 8px currentColor;
+      transition: all 0.3s ease;
+    }
+
+    .state-name {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      min-width: 80px;
+    }
+
+    .state-progress-bar {
+      width: 90px;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 3px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .state-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #00f0ff, #fff);
+      box-shadow: 0 0 8px #00f0ff;
+      border-radius: 3px;
+      transition: width 0.05s linear;
+    }
+
+    /* Center Action Trigger */
+    .center-action {
+      position: absolute;
+      bottom: 110px;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .cast-button {
+      background: linear-gradient(135deg, rgba(224, 56, 117, 0.85) 0%, rgba(135, 20, 75, 0.95) 100%);
+      color: #ffffff;
+      border: 2px solid #ff7fae;
+      border-radius: 40px;
+      padding: 14px 38px;
+      font-family: inherit;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      cursor: pointer;
+      box-shadow: 0 0 25px rgba(255, 74, 143, 0.5), inset 0 0 15px rgba(255, 255, 255, 0.3);
+      transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cast-button:hover {
+      transform: scale(1.06);
+      background: linear-gradient(135deg, #ff4d91 0%, #a81c5f 100%);
+      box-shadow: 0 0 35px rgba(255, 90, 160, 0.8), inset 0 0 20px rgba(255, 255, 255, 0.6);
+      border-color: #ffffff;
+    }
+
+    .cast-button:active {
+      transform: scale(0.96);
+    }
+
+    .cast-button::after {
+      content: '';
+      position: absolute;
+      top: -50%;
+      left: -60%;
+      width: 40%;
+      height: 200%;
+      background: rgba(255, 255, 255, 0.4);
+      transform: rotate(30deg);
+      transition: all 0.6s ease;
+    }
+
+    .cast-button:hover::after {
+      left: 140%;
+    }
+
+    .cast-hint {
+      font-size: 11px;
+      letter-spacing: 1.5px;
+      color: #9cb2db;
+      text-shadow: 0 2px 4px #000;
+    }
+
+    /* Footer Controls */
+    .footer-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      pointer-events: auto;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .control-panel {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      padding: 10px 18px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .panel-label {
+      font-size: 11px;
+      letter-spacing: 1.5px;
+      color: #8da4d0;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 6px;
+    }
+
+    .btn-chip {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 8px;
+      color: #c9d8f5;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      padding: 6px 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-chip:hover {
+      background: rgba(0, 240, 255, 0.25);
+      border-color: #00f0ff;
+      color: #fff;
+    }
+
+    .btn-chip.active {
+      background: linear-gradient(135deg, rgba(0, 240, 255, 0.35), rgba(76, 0, 255, 0.35));
+      border-color: #00f0ff;
+      color: #ffffff;
+      box-shadow: 0 0 12px rgba(0, 240, 255, 0.4);
+    }
+
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #c9d8f5;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-size: 16px;
+    }
+
+    .icon-btn:hover {
+      background: rgba(0, 240, 255, 0.3);
+      border-color: #00f0ff;
+      color: #fff;
+    }
+
+    .help-tooltip {
+      position: absolute;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: rgba(200, 215, 255, 0.5);
+      pointer-events: none;
+      text-transform: uppercase;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      #ui-container { padding: 14px 16px; }
+      .title-group h1 { font-size: 18px; }
+      .title-group p { display: none; }
+      .footer-bar { flex-direction: column; align-items: stretch; gap: 10px; }
+      .center-action { bottom: 170px; }
+      .cast-button { padding: 10px 24px; font-size: 14px; }
+    }
+  </style>
+  <!-- Three.js from primary and fallback CDNs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    if (typeof THREE === 'undefined') {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"><\/script>');
+    }
+  </script>
+  <script>
+    if (typeof THREE === 'undefined') {
+      document.write('<script src="https://unpkg.com/three@0.128.0/build/three.min.js"><\/script>');
+    }
+  </script>
+</head>
+<body>
+  <canvas id="webgl-canvas"></canvas>
+  <div class="vignette"></div>
+
+  <!-- HUD Overlay -->
+  <div id="ui-container">
+    <!-- Top Header -->
+    <header class="header-bar">
+      <div class="title-group">
+        <h1>Arcane Sorcerer</h1>
+        <p>Generational Sequel • Three.js 3D Reimagining</p>
+      </div>
+
+      <div class="state-badge-container">
+        <div id="state-dot" class="state-indicator"></div>
+        <div id="state-text" class="state-name">IDLE</div>
+        <div class="state-progress-bar">
+          <div id="state-fill" class="state-progress-fill"></div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Center Cast Action -->
+    <div class="center-action">
+      <button id="btn-cast-now" class="cast-button">Cast Spell</button>
+      <div class="cast-hint">[Space] or Click to Unleash</div>
+    </div>
+
+    <!-- Bottom Controls -->
+    <footer class="footer-bar">
+      <!-- Camera Presets -->
+      <div class="control-panel">
+        <span class="panel-label">Cinematic Cam</span>
+        <div class="btn-group">
+          <button class="btn-chip active" data-cam="cinematic">Cinematic</button>
+          <button class="btn-chip" data-cam="classic">V1 Classic</button>
+          <button class="btn-chip" data-cam="hero">Hero Low</button>
+          <button class="btn-chip" data-cam="target">Impact</button>
+          <button class="btn-chip" data-cam="orbit">Free Orbit</button>
+        </div>
+      </div>
+
+      <!-- Playback & Audio -->
+      <div class="control-panel">
+        <span class="panel-label">Speed</span>
+        <div class="btn-group">
+          <button class="btn-chip" data-speed="0.25">0.25x</button>
+          <button class="btn-chip active" data-speed="1.0">1.0x</button>
+          <button class="btn-chip" data-speed="1.8">1.8x</button>
+        </div>
+        <button id="btn-audio" class="icon-btn" title="Toggle Synthesized Web Audio">🔇</button>
+        <button id="btn-loop" class="icon-btn active" title="Toggle Auto Spell Loop">🔄</button>
+        <button id="btn-ui-toggle" class="icon-btn" title="Toggle HUD (H)">👁️</button>
+      </div>
+    </footer>
+
+    <div class="help-tooltip">Left-drag to Orbit • Right-drag to Pan • Wheel to Zoom • Press 'H' to Hide UI</div>
+  </div>
+
+  <!-- Main Application Script -->
+  <script>
+  (function () {
+    'use strict';
+
+    // =========================================================================
+    // 1. PROCEDURAL SOUND SYNTHESIZER (Web Audio API)
+    // =========================================================================
+    class ProceduralAudioEngine {
+      constructor() {
+        this.ctx = null;
+        this.enabled = false;
+        this.masterGain = null;
+        this.windGain = null;
+      }
+
+      init() {
+        if (this.ctx) return;
+        try {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          this.ctx = new AudioContext();
+          this.masterGain = this.ctx.createGain();
+          this.masterGain.gain.setValueAtTime(this.enabled ? 0.75 : 0, this.ctx.currentTime);
+          this.masterGain.connect(this.ctx.destination);
+          this.startWindAmbience();
+        } catch (e) {
+          console.warn('Web Audio not available:', e);
+        }
+      }
+
+      handleUserInteraction() {
+        if (this.ctx && this.ctx.state === 'suspended' && this.enabled) {
+          this.ctx.resume();
+        }
+      }
+
+      toggle() {
+        if (!this.ctx) this.init();
+        if (!this.ctx) return false;
+
+        if (this.ctx.state === 'suspended') {
+          this.ctx.resume();
+        }
+
+        this.enabled = !this.enabled;
+        if (this.masterGain) {
+          this.masterGain.gain.setTargetAtTime(this.enabled ? 0.75 : 0, this.ctx.currentTime, 0.05);
+        }
+        return this.enabled;
+      }
+
+      startWindAmbience() {
+        if (!this.ctx) return;
+        // White noise buffer for mysterious mountain wind
+        const bufferSize = this.ctx.sampleRate * 2;
+        const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const output = noiseBuffer.getChannelData(0);
+        let lastOut = 0.0;
+        for (let i = 0; i < bufferSize; i++) {
+          const white = Math.random() * 2 - 1;
+          output[i] = (lastOut + 0.02 * white) / 1.02; // Pink/brown filter
+          lastOut = output[i];
+          output[i] *= 3.5;
+        }
+
+        const whiteNoise = this.ctx.createBufferSource();
+        whiteNoise.buffer = noiseBuffer;
+        whiteNoise.loop = true;
+
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(320, this.ctx.currentTime);
+        filter.Q.setValueAtTime(2.5, this.ctx.currentTime);
+
+        this.windGain = this.ctx.createGain();
+        this.windGain.gain.setValueAtTime(0.08, this.ctx.currentTime);
+
+        whiteNoise.connect(filter);
+        filter.connect(this.windGain);
+        this.windGain.connect(this.masterGain);
+        whiteNoise.start(0);
+      }
+
+      playChargeStart(duration) {
+        if (!this.enabled || !this.ctx) return;
+        const now = this.ctx.currentTime;
+
+        // Ascending harmonic resonant drone
+        const osc = this.ctx.createOscillator();
+        const osc2 = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        const filter = this.ctx.createBiquadFilter();
+
+        osc.type = 'sawtooth';
+        osc2.type = 'sine';
+
+        // Pitch sweeps from deep mystique up to a tense shimmer
+        osc.frequency.setValueAtTime(110, now);
+        osc.frequency.exponentialRampToValueAtTime(520, now + duration);
+
+        osc2.frequency.setValueAtTime(165, now);
+        osc2.frequency.exponentialRampToValueAtTime(780, now + duration);
+
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(200, now);
+        filter.frequency.exponentialRampToValueAtTime(2200, now + duration);
+        filter.Q.setValueAtTime(4.0, now);
+
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.exponentialRampToValueAtTime(0.35, now + duration * 0.85);
+        gain.gain.linearRampToValueAtTime(0.0, now + duration);
+
+        osc.connect(filter);
+        osc2.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.masterGain);
+
+        osc.start(now);
+        osc2.start(now);
+        osc.stop(now + duration);
+        osc2.stop(now + duration);
+      }
+
+      playCastBurst() {
+        if (!this.enabled || !this.ctx) return;
+        const now = this.ctx.currentTime;
+
+        // 1. Deep Sub-bass Thud
+        const subOsc = this.ctx.createOscillator();
+        const subGain = this.ctx.createGain();
+        subOsc.type = 'sine';
+        subOsc.frequency.setValueAtTime(140, now);
+        subOsc.frequency.exponentialRampToValueAtTime(32, now + 0.38);
+        subGain.gain.setValueAtTime(0.9, now);
+        subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+        subOsc.connect(subGain);
+        subGain.connect(this.masterGain);
+        subOsc.start(now);
+        subOsc.stop(now + 0.45);
+
+        // 2. High-energy Arcane Snap / Flash
+        const bufferSize = this.ctx.sampleRate * 0.35;
+        const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * 0.05));
+        }
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = noiseBuffer;
+        const bandpass = this.ctx.createBiquadFilter();
+        bandpass.type = 'bandpass';
+        bandpass.frequency.setValueAtTime(3400, now);
+        bandpass.Q.setValueAtTime(3.0, now);
+        const snapGain = this.ctx.createGain();
+        snapGain.gain.setValueAtTime(0.7, now);
+        snapGain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+
+        noise.connect(bandpass);
+        bandpass.connect(snapGain);
+        snapGain.connect(this.masterGain);
+        noise.start(now);
+      }
+
+      playImpactBoom() {
+        if (!this.enabled || !this.ctx) return;
+        const now = this.ctx.currentTime;
+
+        // 1. Deep seismic detonation
+        const subOsc = this.ctx.createOscillator();
+        const subGain = this.ctx.createGain();
+        subOsc.type = 'triangle';
+        subOsc.frequency.setValueAtTime(95, now);
+        subOsc.frequency.exponentialRampToValueAtTime(24, now + 0.65);
+        subGain.gain.setValueAtTime(1.0, now);
+        subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+        subOsc.connect(subGain);
+        subGain.connect(this.masterGain);
+        subOsc.start(now);
+        subOsc.stop(now + 0.7);
+
+        // 2. Crystal shatter resonance
+        const chime = this.ctx.createOscillator();
+        const chimeGain = this.ctx.createGain();
+        chime.type = 'sine';
+        chime.frequency.setValueAtTime(1240, now);
+        chime.frequency.exponentialRampToValueAtTime(320, now + 0.5);
+        chimeGain.gain.setValueAtTime(0.4, now);
+        chimeGain.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+        chime.connect(chimeGain);
+        chimeGain.connect(this.masterGain);
+        chime.start(now);
+        chime.stop(now + 0.55);
+      }
+    }
+
+    const audio = new ProceduralAudioEngine();
+
+    // =========================================================================
+    // 2. PROCEDURAL TEXTURE GENERATOR
+    // =========================================================================
+    const Textures = {
+      // Intricate Arcane Runes for Altar Floor
+      createRuneDisc: function () {
+        const size = 1024;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        ctx.clearRect(0, 0, size, size);
+
+        // Draw concentric magical circles
+        ctx.strokeStyle = '#00f0ff';
+        ctx.shadowColor = '#00f0ff';
+        ctx.shadowBlur = 12;
+
+        const radii = [480, 460, 410, 390, 280, 180, 100];
+        radii.forEach((r, idx) => {
+          ctx.beginPath();
+          ctx.lineWidth = idx % 2 === 0 ? 5 : 2;
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.stroke();
+        });
+
+        // 8-Point Star Mandala
+        ctx.beginPath();
+        ctx.lineWidth = 3;
+        for (let i = 0; i < 8; i++) {
+          const a = (i * Math.PI * 2) / 8;
+          const r1 = 410;
+          const r2 = 180;
+          ctx.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+          ctx.lineTo(cx + Math.cos(a + Math.PI / 4) * r2, cy + Math.sin(a + Math.PI / 4) * r2);
+          ctx.lineTo(cx + Math.cos(a + Math.PI / 2) * r1, cy + Math.sin(a + Math.PI / 2) * r1);
+        }
+        ctx.stroke();
+
+        // 12-Segment Radial Spoke Marks & Glyphs
+        for (let i = 0; i < 24; i++) {
+          const a = (i * Math.PI * 2) / 24;
+          const x1 = cx + Math.cos(a) * 410;
+          const y1 = cy + Math.sin(a) * 410;
+          const x2 = cx + Math.cos(a) * 460;
+          const y2 = cy + Math.sin(a) * 460;
+
+          ctx.beginPath();
+          ctx.lineWidth = i % 2 === 0 ? 4 : 2;
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+
+          // Stylized Elder Futhark-like glyphs in outer ring
+          if (i % 2 === 0) {
+            ctx.save();
+            ctx.translate(cx + Math.cos(a + 0.13) * 435, cy + Math.sin(a + 0.13) * 435);
+            ctx.rotate(a + Math.PI / 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 22px serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const runes = ['ᚦ', 'ᚨ', 'ᚱ', 'ᚲ', 'ᚷ', 'ᚹ', 'ᚺ', 'ᚾ', 'ᛁ', 'ᛃ', 'ᛈ', 'ᛉ'];
+            ctx.fillText(runes[(i / 2) % runes.length], 0, 0);
+            ctx.restore();
+          }
+        }
+
+        // Inner glowing core ring
+        ctx.beginPath();
+        ctx.arc(cx, cy, 75, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0, 240, 255, 0.12)';
+        ctx.fill();
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.anisotropy = 8;
+        return tex;
+      },
+
+      // Weathered Ancient Flagstone Altar Surface
+      createStoneTexture: function () {
+        const size = 512;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        // Dark slate/indigo base
+        ctx.fillStyle = '#222338';
+        ctx.fillRect(0, 0, size, size);
+
+        // Stone blocks pattern with mortar grooves
+        const tileSize = 64;
+        for (let y = 0; y < size; y += tileSize) {
+          const shift = (y / tileSize) % 2 === 0 ? 0 : tileSize / 2;
+          for (let x = -shift; x < size + tileSize; x += tileSize) {
+            const seed = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+            const shade = Math.floor(35 + (seed - Math.floor(seed)) * 30);
+            ctx.fillStyle = `rgb(${shade}, ${shade + 4}, ${shade + 18})`;
+            ctx.fillRect(x + 2, y + 2, tileSize - 4, tileSize - 4);
+
+            // Subtle highlight edge on top & left
+            ctx.strokeStyle = `rgba(160, 185, 230, 0.15)`;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x + 2, y + 2, tileSize - 4, tileSize - 4);
+          }
+        }
+
+        // Noise grain overlay
+        const imgData = ctx.getImageData(0, 0, size, size);
+        const data = imgData.data;
+        for (let i = 0; i < data.length; i += 4) {
+          const n = (Math.random() - 0.5) * 22;
+          data[i] = Math.min(255, Math.max(0, data[i] + n));
+          data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + n));
+          data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + n + 4));
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(4, 4);
+        return tex;
+      },
+
+      // Moon Surface Texture with Craters & Maria
+      createMoonTexture: function () {
+        const size = 512;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        // Pearlescent silver/lunar base
+        ctx.fillStyle = '#dde8f8';
+        ctx.fillRect(0, 0, size, size);
+
+        // Dark basalt plains (maria)
+        const numMaria = 14;
+        for (let i = 0; i < numMaria; i++) {
+          const mx = (Math.sin(i * 9.3) * 0.4 + 0.5) * size;
+          const my = (Math.cos(i * 7.1) * 0.4 + 0.5) * size;
+          const rad = 40 + (i % 5) * 25;
+          const grad = ctx.createRadialGradient(mx, my, 5, mx, my, rad);
+          grad.addColorStop(0, 'rgba(120, 138, 170, 0.65)');
+          grad.addColorStop(0.7, 'rgba(150, 168, 195, 0.35)');
+          grad.addColorStop(1, 'rgba(220, 232, 248, 0)');
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(mx, my, rad, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Craters with bright rims and shadowed centers
+        for (let i = 0; i < 50; i++) {
+          const cx = Math.random() * size;
+          const cy = Math.random() * size;
+          const r = 4 + Math.random() * 20;
+
+          // Rim
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, -Math.PI * 0.7, Math.PI * 0.3);
+          ctx.stroke();
+
+          // Shadow interior
+          ctx.fillStyle = 'rgba(80, 95, 125, 0.45)';
+          ctx.beginPath();
+          ctx.arc(cx, cy, r - 1.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        const tex = new THREE.CanvasTexture(canvas);
+        return tex;
+      },
+
+      // Soft Radial Glow Particle Sprite
+      createGlowSprite: function () {
+        const size = 128;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const c = size / 2;
+
+        const grad = ctx.createRadialGradient(c, c, 0, c, c, c);
+        grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        grad.addColorStop(0.2, 'rgba(100, 245, 255, 0.9)');
+        grad.addColorStop(0.55, 'rgba(0, 180, 255, 0.35)');
+        grad.addColorStop(1, 'rgba(0, 80, 255, 0)');
+
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, size, size);
+
+        return new THREE.CanvasTexture(canvas);
+      },
+
+      // Sharp 4-Point Star Sparkle
+      createSparkleSprite: function () {
+        const size = 128;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const c = size / 2;
+
+        ctx.clearRect(0, 0, size, size);
+
+        // Core glow
+        const grad = ctx.createRadialGradient(c, c, 0, c, c, 28);
+        grad.addColorStop(0, '#ffffff');
+        grad.addColorStop(0.4, 'rgba(0, 240, 255, 0.9)');
+        grad.addColorStop(1, 'rgba(0, 150, 255, 0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(c, c, 28, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 4 Star Rays
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        for (let i = 0; i < 4; i++) {
+          ctx.save();
+          ctx.translate(c, c);
+          ctx.rotate((i * Math.PI) / 2);
+          ctx.beginPath();
+          ctx.moveTo(-2, 0);
+          ctx.lineTo(0, 58);
+          ctx.lineTo(2, 0);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        return new THREE.CanvasTexture(canvas);
+      }
+    };
+
+    // =========================================================================
+    // 3. WIZARD 3D MODEL BUILDER (Handcrafted Procedural Character)
+    // =========================================================================
+    class WizardCharacter {
+      constructor(scene) {
+        this.scene = scene;
+        this.group = new THREE.Group();
+        this.group.position.set(-4.5, 0, 0);
+        this.group.rotation.y = Math.PI * 0.42; // Dynamic 3/4 heroic spellcaster stance facing towards target monolith (+X)
+        this.scene.add(this.group);
+
+        // Hierarchical Nodes for Smooth Organic Posing
+        this.nodes = {
+          root: this.group,
+          body: new THREE.Group(),
+          chest: new THREE.Group(),
+          mantle: new THREE.Group(),
+          head: new THREE.Group(),
+          hatSegments: [],
+          beardSegments: [],
+          mustacheLeft: null,
+          mustacheRight: null,
+          leftArm: new THREE.Group(),
+          leftForearm: new THREE.Group(),
+          rightArm: new THREE.Group(),
+          rightForearm: new THREE.Group(),
+          staffGroup: new THREE.Group(),
+          gemMesh: null,
+          gemCore: null,
+          gemLight: null,
+          orbitalRing1: null,
+          orbitalRing2: null,
+          robeMesh: null,
+          beltPouch: null
+        };
+
+        this.buildWizard();
+      }
+
+      buildWizard() {
+        // --- Shared Stylized Fantasy Materials ---
+        const matRobeDark = new THREE.MeshStandardMaterial({
+          color: 0x5a1835, // Deep royal wine/plum
+          roughness: 0.72,
+          metalness: 0.1,
+          flatShading: true
+        });
+
+        const matRobeLight = new THREE.MeshStandardMaterial({
+          color: 0x8a264e, // Magenta-plum light tone
+          roughness: 0.65,
+          metalness: 0.12,
+          flatShading: true
+        });
+
+        const matRobeTrim = new THREE.MeshStandardMaterial({
+          color: 0xf5b82e, // Warm antique gold trim
+          roughness: 0.35,
+          metalness: 0.85
+        });
+
+        const matBeard = new THREE.MeshStandardMaterial({
+          color: 0xf4f6fb, // Radiant silver-white beard
+          roughness: 0.65,
+          metalness: 0.08,
+          flatShading: true
+        });
+
+        const matSkin = new THREE.MeshStandardMaterial({
+          color: 0xf5b78d, // Warm peach skin
+          roughness: 0.75,
+          metalness: 0.05,
+          flatShading: true
+        });
+
+        const matWood = new THREE.MeshStandardMaterial({
+          color: 0x4a2a16, // Dark aged gnarled wood
+          roughness: 0.85,
+          metalness: 0.1,
+          flatShading: true
+        });
+
+        const matGold = new THREE.MeshStandardMaterial({
+          color: 0xffd147,
+          roughness: 0.3,
+          metalness: 0.9
+        });
+
+        // 1. Lower Robe / Skirt (Tapered, Flared, Faceted)
+        const skirtGeo = new THREE.CylinderGeometry(0.72, 1.25, 2.3, 10, 3, false);
+        // Slightly flare and fold back for billow dynamics
+        const posAttr = skirtGeo.attributes.position;
+        for (let i = 0; i < posAttr.count; i++) {
+          const y = posAttr.getY(i);
+          if (y < -0.5) {
+            const z = posAttr.getZ(i);
+            posAttr.setZ(i, z - 0.15); // gentle rear drape
+          }
+        }
+        skirtGeo.computeVertexNormals();
+
+        this.nodes.robeMesh = new THREE.Mesh(skirtGeo, matRobeDark);
+        this.nodes.robeMesh.position.y = 1.15;
+        this.nodes.robeMesh.castShadow = true;
+        this.nodes.robeMesh.receiveShadow = true;
+        this.nodes.body.add(this.nodes.robeMesh);
+
+        // Skirt Gold Hem Ring
+        const hemGeo = new THREE.TorusGeometry(1.23, 0.04, 6, 12);
+        hemGeo.rotateX(Math.PI / 2);
+        const hemMesh = new THREE.Mesh(hemGeo, matRobeTrim);
+        hemMesh.position.y = 0.04;
+        this.nodes.body.add(hemMesh);
+
+        // 2. Torso / Chest & Belt
+        this.nodes.chest.position.y = 2.15;
+        this.nodes.body.add(this.nodes.chest);
+
+        const torsoGeo = new THREE.CylinderGeometry(0.55, 0.7, 1.1, 8);
+        const torsoMesh = new THREE.Mesh(torsoGeo, matRobeLight);
+        torsoMesh.position.y = 0.45;
+        torsoMesh.castShadow = true;
+        this.nodes.chest.add(torsoMesh);
+
+        // Center Gold Runic Robe Placket
+        const placketGeo = new THREE.BoxGeometry(0.12, 1.05, 0.05);
+        const placketMesh = new THREE.Mesh(placketGeo, matRobeTrim);
+        placketMesh.position.set(0, 0.45, 0.58);
+        this.nodes.chest.add(placketMesh);
+
+        // Ornate Leather & Gold Belt
+        const beltGeo = new THREE.CylinderGeometry(0.71, 0.72, 0.22, 10);
+        const matBelt = new THREE.MeshStandardMaterial({ color: 0x2b1710, roughness: 0.8 });
+        const beltMesh = new THREE.Mesh(beltGeo, matBelt);
+        beltMesh.position.y = 0.02;
+        this.nodes.chest.add(beltMesh);
+
+        // Golden Belt Buckle
+        const buckleGeo = new THREE.BoxGeometry(0.32, 0.28, 0.12);
+        const buckleMesh = new THREE.Mesh(buckleGeo, matGold);
+        buckleMesh.position.set(0, 0.02, 0.72);
+        this.nodes.chest.add(buckleMesh);
+
+        // Hanging Spell Tome & Potion Vial at hip
+        const bookGeo = new THREE.BoxGeometry(0.35, 0.45, 0.16);
+        const matBook = new THREE.MeshStandardMaterial({ color: 0x421226, roughness: 0.6 });
+        const bookMesh = new THREE.Mesh(bookGeo, matBook);
+        bookMesh.position.set(-0.68, -0.15, 0.2);
+        bookMesh.rotation.z = 0.25;
+        bookMesh.rotation.y = 0.5;
+        this.nodes.chest.add(bookMesh);
+
+        const vialGeo = new THREE.SphereGeometry(0.12, 8, 8);
+        const matVial = new THREE.MeshStandardMaterial({
+          color: 0x00f0ff,
+          emissive: 0x00a2ff,
+          emissiveIntensity: 0.6,
+          roughness: 0.2
+        });
+        const vialMesh = new THREE.Mesh(vialGeo, matVial);
+        vialMesh.position.set(0.68, -0.12, 0.25);
+        this.nodes.chest.add(vialMesh);
+
+        // 3. Broad Shoulder Cowl / Mantle
+        this.nodes.mantle.position.y = 0.95;
+        this.nodes.chest.add(this.nodes.mantle);
+
+        const mantleGeo = new THREE.CylinderGeometry(0.5, 0.9, 0.45, 8);
+        const mantleMesh = new THREE.Mesh(mantleGeo, matRobeDark);
+        mantleMesh.castShadow = true;
+        this.nodes.mantle.add(mantleMesh);
+
+        // 4. Head, Face & Glowing Eyes
+        this.nodes.head.position.y = 0.42;
+        this.nodes.mantle.add(this.nodes.head);
+
+        const headGeo = new THREE.BoxGeometry(0.5, 0.52, 0.52);
+        const headMesh = new THREE.Mesh(headGeo, matSkin);
+        headMesh.position.y = 0.2;
+        headMesh.castShadow = true;
+        this.nodes.head.add(headMesh);
+
+        // Sculpted Wizard Nose
+        const noseGeo = new THREE.ConeGeometry(0.08, 0.24, 4);
+        noseGeo.rotateX(Math.PI / 2);
+        const noseMesh = new THREE.Mesh(noseGeo, matSkin);
+        noseMesh.position.set(0, 0.18, 0.36);
+        this.nodes.head.add(noseMesh);
+
+        // Glowing Mystic Arcane Eyes
+        const eyeGeo = new THREE.SphereGeometry(0.065, 8, 8);
+        const matEye = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+
+        const eyeL = new THREE.Mesh(eyeGeo, matEye);
+        eyeL.position.set(0.14, 0.24, 0.29);
+        const eyeR = new THREE.Mesh(eyeGeo, matEye);
+        eyeR.position.set(-0.14, 0.24, 0.29);
+        this.nodes.head.add(eyeL);
+        this.nodes.head.add(eyeR);
+
+        // 5. The Grand Cascading Low-Poly Beard (3 Jointed Segments)
+        let parentBeard = this.nodes.head;
+        const beardSpecs = [
+          { rTop: 0.36, rBot: 0.28, h: 0.55, y: 0.02, z: 0.36 },
+          { rTop: 0.28, rBot: 0.18, h: 0.60, y: -0.55, z: 0.05 },
+          { rTop: 0.18, rBot: 0.04, h: 0.65, y: -0.60, z: 0.04 }
+        ];
+
+        beardSpecs.forEach((spec, idx) => {
+          const segGroup = new THREE.Group();
+          segGroup.position.set(0, spec.y, spec.z);
+          parentBeard.add(segGroup);
+          this.nodes.beardSegments.push(segGroup);
+
+          // Sculpted faceted seamless beard cylinder with matching joint radii
+          const bGeo = new THREE.CylinderGeometry(spec.rTop, spec.rBot, spec.h, 6);
+          const bMesh = new THREE.Mesh(bGeo, matBeard);
+          bMesh.position.y = -spec.h / 2;
+          bMesh.castShadow = true;
+          segGroup.add(bMesh);
+
+          // Sharp faceted tip cone at terminal segment
+          if (idx === beardSpecs.length - 1) {
+            const tipGeo = new THREE.ConeGeometry(spec.rBot, 0.16, 6);
+            tipGeo.rotateX(Math.PI);
+            const tipMesh = new THREE.Mesh(tipGeo, matBeard);
+            tipMesh.position.y = -spec.h - 0.08;
+            tipMesh.castShadow = true;
+            segGroup.add(tipMesh);
+          }
+
+          parentBeard = segGroup;
+        });
+
+        // Flared Mustache Wings (Sculpted Faceted Cylinders)
+        const mustGeoL = new THREE.CylinderGeometry(0.04, 0.09, 0.38, 5);
+        mustGeoL.rotateZ(-Math.PI / 2);
+        this.nodes.mustacheLeft = new THREE.Mesh(mustGeoL, matBeard);
+        this.nodes.mustacheLeft.position.set(0.18, 0.12, 0.38);
+        this.nodes.mustacheLeft.rotation.set(-0.15, 0.2, -0.22);
+        this.nodes.head.add(this.nodes.mustacheLeft);
+
+        const mustGeoR = new THREE.CylinderGeometry(0.04, 0.09, 0.38, 5);
+        mustGeoR.rotateZ(Math.PI / 2);
+        this.nodes.mustacheRight = new THREE.Mesh(mustGeoR, matBeard);
+        this.nodes.mustacheRight.position.set(-0.18, 0.12, 0.38);
+        this.nodes.mustacheRight.rotation.set(-0.15, -0.2, 0.22);
+        this.nodes.head.add(this.nodes.mustacheRight);
+
+        // 6. The Iconic Exaggerated Bent Pointed Hat
+        // Hat Brim
+        const brimGeo = new THREE.CylinderGeometry(1.15, 1.25, 0.08, 12);
+        brimGeo.rotateX(-0.06); // tilted back slightly so eyes and face are visible!
+        const hatBrim = new THREE.Mesh(brimGeo, matRobeDark);
+        hatBrim.position.set(0, 0.42, 0.03);
+        hatBrim.castShadow = true;
+        this.nodes.head.add(hatBrim);
+
+        // Hat Gold Band
+        const bandGeo = new THREE.CylinderGeometry(0.68, 0.78, 0.18, 10);
+        const hatBand = new THREE.Mesh(bandGeo, matRobeTrim);
+        hatBand.position.set(0, 0.52, 0.04);
+        this.nodes.head.add(hatBand);
+
+        // 5 Jointed Segments forming the iconic backward curve & bend
+        let parentHat = this.nodes.head;
+        const hatSegments = [
+          { rTop: 0.55, rBot: 0.68, h: 0.45, tilt: -0.15, py: 0.65 },
+          { rTop: 0.42, rBot: 0.55, h: 0.45, tilt: -0.22, py: 0.4 },
+          { rTop: 0.28, rBot: 0.42, h: 0.42, tilt: -0.30, py: 0.38 },
+          { rTop: 0.14, rBot: 0.28, h: 0.40, tilt: -0.38, py: 0.35 },
+          { rTop: 0.02, rBot: 0.14, h: 0.38, tilt: -0.45, py: 0.32 }
+        ];
+
+        hatSegments.forEach((spec, idx) => {
+          const seg = new THREE.Group();
+          seg.position.set(0, spec.py, idx === 0 ? 0.02 : 0);
+          seg.rotation.x = spec.tilt; // Curve back!
+          parentHat.add(seg);
+          this.nodes.hatSegments.push(seg);
+
+          const hGeo = new THREE.CylinderGeometry(spec.rTop, spec.rBot, spec.h, 7);
+          const hMesh = new THREE.Mesh(hGeo, matRobeDark);
+          hMesh.position.y = spec.h / 2;
+          hMesh.castShadow = true;
+          seg.add(hMesh);
+
+          // Star Charm at tip of the last segment
+          if (idx === hatSegments.length - 1) {
+            const starGeo = new THREE.OctahedronGeometry(0.1, 0);
+            const starMesh = new THREE.Mesh(starGeo, matGold);
+            starMesh.position.set(0, spec.h + 0.05, 0);
+            seg.add(starMesh);
+          }
+
+          parentHat = seg;
+        });
+
+        // Common Arm Geometries
+        const bicepGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.65, 6);
+        const sleeveGeo = new THREE.CylinderGeometry(0.32, 0.18, 0.7, 7);
+        const handGeo = new THREE.SphereGeometry(0.14, 6, 6);
+
+        // 7. Right Arm (Forward / Camera-Facing Staff Arm)
+        this.nodes.rightArm.position.set(-0.72, 0.8, 0);
+        this.nodes.chest.add(this.nodes.rightArm);
+
+        const rBicepMesh = new THREE.Mesh(bicepGeo, matRobeLight);
+        rBicepMesh.position.y = -0.3;
+        rBicepMesh.castShadow = true;
+        this.nodes.rightArm.add(rBicepMesh);
+
+        this.nodes.rightForearm.position.set(0, -0.6, 0);
+        this.nodes.rightArm.add(this.nodes.rightForearm);
+
+        const rSleeveMesh = new THREE.Mesh(sleeveGeo, matRobeDark);
+        rSleeveMesh.position.y = -0.3;
+        rSleeveMesh.castShadow = true;
+        this.nodes.rightForearm.add(rSleeveMesh);
+
+        const rHandMesh = new THREE.Mesh(handGeo, matSkin);
+        rHandMesh.position.set(0, -0.65, 0);
+        this.nodes.rightForearm.add(rHandMesh);
+
+        // 8. The Gnarled Wooden Staff & Glowing Focus Crystal
+        this.nodes.staffGroup.position.set(0, -0.65, 0);
+        this.nodes.rightForearm.add(this.nodes.staffGroup);
+
+        // Staff Shaft (3 connected segments with gnarled angles)
+        const staffShaftGeo = new THREE.CylinderGeometry(0.08, 0.09, 3.8, 6);
+        const staffShaftMesh = new THREE.Mesh(staffShaftGeo, matWood);
+        staffShaftMesh.position.y = 0.55;
+        staffShaftMesh.castShadow = true;
+        this.nodes.staffGroup.add(staffShaftMesh);
+
+        // Staff Brass Bands
+        const ringGeo = new THREE.TorusGeometry(0.1, 0.025, 4, 8);
+        const r1 = new THREE.Mesh(ringGeo, matGold);
+        r1.position.y = 1.6;
+        const r2 = new THREE.Mesh(ringGeo, matGold);
+        r2.position.y = -0.5;
+        this.nodes.staffGroup.add(r1);
+        this.nodes.staffGroup.add(r2);
+
+        // Staff Crown / Claw Head holding Gem
+        const crownBase = new THREE.Group();
+        crownBase.position.y = 2.45;
+        this.nodes.staffGroup.add(crownBase);
+
+        for (let i = 0; i < 4; i++) {
+          const clawGeo = new THREE.BoxGeometry(0.06, 0.45, 0.06);
+          const clawMesh = new THREE.Mesh(clawGeo, matGold);
+          clawMesh.position.set(
+            Math.cos((i * Math.PI) / 2) * 0.16,
+            0.18,
+            Math.sin((i * Math.PI) / 2) * 0.16
+          );
+          clawMesh.rotation.y = (i * Math.PI) / 2;
+          clawMesh.rotation.z = Math.cos((i * Math.PI) / 2) * -0.25;
+          clawMesh.rotation.x = Math.sin((i * Math.PI) / 2) * 0.25;
+          crownBase.add(clawMesh);
+        }
+
+        // The Oversized Glowing Arcane Gem
+        const gemGeo = new THREE.IcosahedronGeometry(0.32, 0);
+        const matGem = new THREE.MeshStandardMaterial({
+          color: 0x00f0ff,
+          emissive: 0x00e1ff,
+          emissiveIntensity: 1.8,
+          roughness: 0.15,
+          metalness: 0.1,
+          flatShading: true
+        });
+        this.nodes.gemMesh = new THREE.Mesh(gemGeo, matGem);
+        this.nodes.gemMesh.position.y = 0.35;
+        crownBase.add(this.nodes.gemMesh);
+
+        // Blazing White Inner Core
+        const coreGeo = new THREE.IcosahedronGeometry(0.16, 0);
+        const matCore = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        this.nodes.gemCore = new THREE.Mesh(coreGeo, matCore);
+        this.nodes.gemMesh.add(this.nodes.gemCore);
+
+        // Staff Dynamic Point Light (Volumetric Magic Illumination)
+        this.nodes.gemLight = new THREE.PointLight(0x00f0ff, 2.2, 16, 2.0);
+        this.nodes.gemLight.castShadow = true;
+        this.nodes.gemLight.shadow.bias = -0.002;
+        this.nodes.gemLight.shadow.mapSize.width = 1024;
+        this.nodes.gemLight.shadow.mapSize.height = 1024;
+        this.nodes.gemMesh.add(this.nodes.gemLight);
+
+        // Orbital Arcane Runic Rings around Gem
+        const orbitGeo = new THREE.TorusGeometry(0.48, 0.015, 4, 16);
+        const matOrbit = new THREE.MeshBasicMaterial({ color: 0x67ffeb, wireframe: true });
+        this.nodes.orbitalRing1 = new THREE.Mesh(orbitGeo, matOrbit);
+        this.nodes.orbitalRing1.rotation.x = 0.5;
+        this.nodes.gemMesh.add(this.nodes.orbitalRing1);
+
+        this.nodes.orbitalRing2 = new THREE.Mesh(orbitGeo, matOrbit);
+        this.nodes.orbitalRing2.rotation.y = 0.8;
+        this.nodes.gemMesh.add(this.nodes.orbitalRing2);
+
+        // 9. Left Arm (Rear Somatic Weaving Arm)
+        this.nodes.leftArm.position.set(0.72, 0.8, 0);
+        this.nodes.chest.add(this.nodes.leftArm);
+
+        const lBicepMesh = new THREE.Mesh(bicepGeo, matRobeLight);
+        lBicepMesh.position.y = -0.3;
+        lBicepMesh.castShadow = true;
+        this.nodes.leftArm.add(lBicepMesh);
+
+        this.nodes.leftForearm.position.set(0, -0.6, 0);
+        this.nodes.leftArm.add(this.nodes.leftForearm);
+
+        const lSleeveMesh = new THREE.Mesh(sleeveGeo, matRobeDark);
+        lSleeveMesh.position.y = -0.3;
+        lSleeveMesh.castShadow = true;
+        this.nodes.leftForearm.add(lSleeveMesh);
+
+        const lHandMesh = new THREE.Mesh(handGeo, matSkin);
+        lHandMesh.position.set(0, -0.65, 0);
+        this.nodes.leftForearm.add(lHandMesh);
+
+        // Add whole body to root
+        this.nodes.root.add(this.nodes.body);
+
+        // Default Pose
+        this.setPoseIdle(0);
+      }
+
+      getGemWorldPosition(targetVec) {
+        if (this.nodes.gemMesh) {
+          this.nodes.gemMesh.getWorldPosition(targetVec);
+        } else {
+          targetVec.copy(this.nodes.root.position).add(new THREE.Vector3(1, 3.5, 0));
+        }
+        return targetVec;
+      }
+
+      // --- Parametric Keyframe Blends & Secondary Oscillations ---
+      setPoseIdle(t, breath) {
+        // Subtle rhythmic breathing
+        const b = Math.sin(breath * 2.2);
+        const w = Math.sin(breath * 1.4);
+
+        this.nodes.root.position.x = -4.5;
+        this.nodes.body.position.y = b * 0.04;
+        this.nodes.chest.rotation.z = b * 0.015;
+        this.nodes.head.rotation.x = -0.05 + b * 0.02;
+
+        // Gentle beard sway
+        this.nodes.beardSegments[0].rotation.z = w * 0.04;
+        this.nodes.beardSegments[1].rotation.z = Math.sin(breath * 1.4 - 0.4) * 0.07;
+        this.nodes.beardSegments[2].rotation.z = Math.sin(breath * 1.4 - 0.8) * 0.12;
+
+        // Hat tip gentle flutter
+        this.nodes.hatSegments[3].rotation.z = Math.sin(breath * 1.2) * 0.04;
+        this.nodes.hatSegments[4].rotation.z = Math.sin(breath * 1.2 - 0.5) * 0.08;
+
+        // Staff resting held at natural upright angle in right hand
+        this.nodes.rightArm.rotation.set(0.15, -0.1, 0.25);
+        this.nodes.rightForearm.rotation.set(0.5, 0, 0);
+        this.nodes.staffGroup.rotation.set(-0.35, 0, -0.15);
+
+        // Left arm relaxed at side
+        this.nodes.leftArm.rotation.set(-0.1, 0, -0.25);
+        this.nodes.leftForearm.rotation.set(0.35, 0, 0.1);
+
+        // Staff Gem Ambient Breathing Glow
+        const gemPulse = 1.6 + 0.5 * Math.sin(breath * 3.0);
+        this.nodes.gemMesh.material.emissiveIntensity = gemPulse;
+        this.nodes.gemLight.intensity = gemPulse * 1.2;
+        this.nodes.orbitalRing1.rotation.z += 0.015;
+        this.nodes.orbitalRing2.rotation.x += 0.02;
+
+        // Robe subtle drift
+        this.nodes.robeMesh.rotation.y = Math.sin(breath * 0.8) * 0.03;
+      }
+
+      setPoseCharge(progress, totalTime) {
+        // Dramatic Anticipation: Staff Raised Overhead Toward Moon, Arched Back
+        const ease = Math.min(1.0, Math.max(0.0, progress));
+        const smooth = ease * ease * (3.0 - 2.0 * ease);
+
+        // Shift root slightly back into power stance
+        this.nodes.root.position.x = -4.5 - smooth * 0.4;
+        this.nodes.body.position.y = smooth * 0.12;
+        this.nodes.chest.rotation.x = -0.25 * smooth; // arched back
+        this.nodes.head.rotation.x = -0.40 * smooth;  // gaze up at blazing celestial focus
+
+        // Right arm raises staff high overhead towards the moon
+        this.nodes.rightArm.rotation.set(
+          0.15 + smooth * 2.15,
+          -0.1 + smooth * 0.2,
+          0.25 - smooth * 0.1
+        );
+        this.nodes.rightForearm.rotation.set(
+          0.5 - smooth * 0.2,
+          0,
+          0
+        );
+        this.nodes.staffGroup.rotation.set(
+          -0.35 - smooth * 1.05,
+          0,
+          -0.15 * (1.0 - smooth)
+        );
+
+        // Left arm gathers and weaves arcane energy threads in front
+        this.nodes.leftArm.rotation.set(
+          -0.1 + smooth * 0.9,
+          -0.3 * smooth,
+          -0.25 - smooth * 0.1
+        );
+        this.nodes.leftForearm.rotation.set(
+          0.35 + smooth * 0.55,
+          0,
+          0.1 + smooth * 0.2
+        );
+
+        // Robes and beard drawn back by magical vortex
+        const vortexFlutter = Math.sin(totalTime * 18.0) * (0.05 + smooth * 0.12);
+        this.nodes.beardSegments[0].rotation.x = 0.2 * smooth;
+        this.nodes.beardSegments[1].rotation.x = 0.45 * smooth + vortexFlutter;
+        this.nodes.beardSegments[2].rotation.x = 0.75 * smooth + vortexFlutter * 1.5;
+
+        // Hat drawn back
+        this.nodes.hatSegments[2].rotation.x = -0.3 - 0.2 * smooth;
+        this.nodes.hatSegments[3].rotation.x = -0.38 - 0.3 * smooth;
+        this.nodes.hatSegments[4].rotation.x = -0.45 - 0.35 * smooth;
+
+        // Blazing Energy Surge & Jitter
+        const jitter = (Math.random() - 0.5) * 0.8 * smooth;
+        const gemPower = 2.0 + smooth * 9.5 + jitter;
+        this.nodes.gemMesh.material.emissiveIntensity = gemPower;
+        this.nodes.gemLight.intensity = gemPower * 1.4;
+        this.nodes.orbitalRing1.rotation.z += 0.04 + smooth * 0.15;
+        this.nodes.orbitalRing2.rotation.x += 0.05 + smooth * 0.18;
+      }
+
+      setPoseCast(progress, totalTime) {
+        // EXPLOSIVE SNAP: Forward Thrust / Lunge, Recoil Shockwave
+        const t = Math.min(1.0, Math.max(0.0, progress));
+
+        if (t < 0.15) {
+          // Instant Snap Thrust (first ~15% of cast state)
+          const snapT = t / 0.15;
+          const thrust = Math.sin(snapT * Math.PI * 0.5);
+
+          this.nodes.root.position.x = -4.9 + thrust * 1.5; // lunges forward across dais
+          this.nodes.body.position.y = -0.12 * thrust;
+          this.nodes.chest.rotation.x = -0.25 + thrust * 0.57; // whips from arched back (-0.25) into forward strike (+0.32)
+          this.nodes.head.rotation.x = -0.40 + thrust * 0.55;  // snaps gaze from sky to target (+0.15)
+
+          // Staff thrusts horizontally forward toward the target monolith!
+          this.nodes.rightArm.rotation.set(
+            2.3 - thrust * 0.95,
+            0.1 - thrust * 0.22,
+            0.15 - thrust * 0.10
+          );
+          this.nodes.rightForearm.rotation.set(
+            0.3 - thrust * 0.25,
+            0,
+            0
+          );
+          this.nodes.staffGroup.rotation.set(
+            -1.4 + thrust * 1.25,
+            0,
+            0
+          );
+
+          // Left arm whips back for recoil balance
+          this.nodes.leftArm.rotation.set(
+            -0.1 - 0.6 * thrust,
+            0,
+            -0.25 - 0.15 * thrust
+          );
+          this.nodes.leftForearm.rotation.set(
+            0.35 - 0.05 * thrust,
+            0,
+            0.1
+          );
+
+          // Violent recoil shockwave on beard and hat
+          this.nodes.beardSegments[0].rotation.x = 0.3 * thrust;
+          this.nodes.beardSegments[1].rotation.x = 0.8 * thrust;
+          this.nodes.beardSegments[2].rotation.x = 1.2 * thrust;
+
+          // Blinding Flash!
+          this.nodes.gemMesh.material.emissiveIntensity = 22.0;
+          this.nodes.gemLight.intensity = 28.0;
+        } else {
+          // Follow-through hold and ripple
+          const ft = (t - 0.15) / 0.85;
+          const ripple = Math.sin(totalTime * 14.0) * Math.exp(-ft * 3.5) * 0.15;
+
+          this.nodes.root.position.x = -3.4 - ft * 0.2;
+          this.nodes.chest.rotation.x = 0.32 - ft * 0.12;
+          this.nodes.head.rotation.x = 0.15 - ft * 0.08;
+
+          this.nodes.rightArm.rotation.set(1.35, -0.12, 0.05);
+          this.nodes.rightForearm.rotation.set(0.05, 0, 0);
+          this.nodes.staffGroup.rotation.set(-0.15, 0, 0);
+
+          this.nodes.leftArm.rotation.set(-0.7, 0, -0.4);
+          this.nodes.leftForearm.rotation.set(0.3, 0, 0.1);
+
+          this.nodes.beardSegments[1].rotation.x = 0.8 * (1.0 - ft * 0.7) + ripple;
+          this.nodes.beardSegments[2].rotation.x = 1.2 * (1.0 - ft * 0.7) + ripple * 1.4;
+
+          // Gem settles
+          this.nodes.gemMesh.material.emissiveIntensity = Math.max(1.8, 14.0 * (1.0 - ft));
+          this.nodes.gemLight.intensity = Math.max(2.0, 18.0 * (1.0 - ft));
+        }
+
+        this.nodes.orbitalRing1.rotation.z += 0.03;
+        this.nodes.orbitalRing2.rotation.x += 0.04;
+      }
+
+      setPoseRecover(progress, totalTime) {
+        // Smooth Graceful Return from Cast Strike back to Idle Rest Pose
+        const ease = Math.min(1.0, Math.max(0.0, progress));
+        const smooth = ease * ease * (3.0 - 2.0 * ease);
+        const inv = 1.0 - smooth;
+
+        this.nodes.root.position.x = -3.6 * inv - 4.5 * smooth;
+        this.nodes.chest.rotation.x = 0.20 * inv;
+        this.nodes.head.rotation.x = 0.07 * inv;
+
+        // Ease staff from horizontal forward back down to upright rest
+        this.nodes.rightArm.rotation.set(
+          1.35 * inv + 0.15 * smooth,
+          -0.12 * inv - 0.1 * smooth,
+          0.05 * inv + 0.25 * smooth
+        );
+        this.nodes.rightForearm.rotation.set(0.05 * inv + 0.5 * smooth, 0, 0);
+        this.nodes.staffGroup.rotation.set(-0.15 * inv - 0.35 * smooth, 0, -0.15 * smooth);
+
+        this.nodes.leftArm.rotation.set(-0.7 * inv - 0.1 * smooth, 0, -0.4 * inv - 0.25 * smooth);
+        this.nodes.leftForearm.rotation.set(0.3 * inv + 0.35 * smooth, 0, 0.1 * smooth);
+
+        // Beard settles with gentle damped oscillation
+        const settle = Math.sin(smooth * Math.PI * 2) * 0.15 * inv;
+        this.nodes.beardSegments[1].rotation.x = 0.25 * inv + settle;
+        this.nodes.beardSegments[2].rotation.x = 0.35 * inv + settle * 1.4;
+
+        this.nodes.gemMesh.material.emissiveIntensity = 2.0 * inv + 1.8 * smooth;
+        this.nodes.gemLight.intensity = 2.5 * inv + 2.0 * smooth;
+      }
+    }
+
+    // =========================================================================
+    // 4. ENVIRONMENT & TARGET MONOLITH BUILDER
+    // =========================================================================
+    class EnvironmentBuilder {
+      constructor(scene) {
+        this.scene = scene;
+        this.runesMesh = null;
+        this.monolithRunes = [];
+        this.monolithLight = null;
+        this.targetMonolith = null;
+        this.mistPlanes = [];
+        this.starsMesh = null;
+
+        this.buildEnvironment();
+      }
+
+      buildEnvironment() {
+        // --- 1. Ancient Stone Altar Dais ---
+        const stoneTex = Textures.createStoneTexture();
+        const matAltar = new THREE.MeshStandardMaterial({
+          map: stoneTex,
+          roughness: 0.82,
+          metalness: 0.15,
+          color: 0x959ebb
+        });
+
+        // Stepped Circular Dais (Radius 12, Height 1.2)
+        const daisGeo = new THREE.CylinderGeometry(11.5, 12.8, 1.2, 32);
+        const daisMesh = new THREE.Mesh(daisGeo, matAltar);
+        daisMesh.position.set(0, -0.6, 0);
+        daisMesh.receiveShadow = true;
+        this.scene.add(daisMesh);
+
+        // Lower Stepped Rim Base
+        const baseGeo = new THREE.CylinderGeometry(13.5, 14.5, 1.4, 32);
+        const baseMesh = new THREE.Mesh(baseGeo, matAltar);
+        baseMesh.position.set(0, -1.8, 0);
+        baseMesh.receiveShadow = true;
+        this.scene.add(baseMesh);
+
+        // Rocky Mountain Peak Foundation (Grounded Cliff Terrain)
+        const cliffGeo = new THREE.CylinderGeometry(14.8, 26.0, 5.0, 16);
+        const matCliff = new THREE.MeshStandardMaterial({
+          color: 0x161828,
+          roughness: 0.9,
+          metalness: 0.1,
+          flatShading: true
+        });
+        const cliffMesh = new THREE.Mesh(cliffGeo, matCliff);
+        cliffMesh.position.set(0, -4.6, 0);
+        cliffMesh.receiveShadow = true;
+        this.scene.add(cliffMesh);
+
+        // --- 2. Carved Mystical Runic Circle Floor ---
+        const runeTex = Textures.createRuneDisc();
+        const matRunes = new THREE.MeshBasicMaterial({
+          map: runeTex,
+          transparent: true,
+          opacity: 0.65,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        const runeGeo = new THREE.PlaneGeometry(16, 16);
+        this.runesMesh = new THREE.Mesh(runeGeo, matRunes);
+        this.runesMesh.rotation.x = -Math.PI / 2;
+        this.runesMesh.position.set(0, 0.015, 0);
+        this.scene.add(this.runesMesh);
+
+        // --- 3. Weathered Ancient Ruin Columns ---
+        const columnGeo = new THREE.CylinderGeometry(0.7, 0.8, 6.5, 8);
+        const columnPositions = [
+          { x: -9.5, z: -5.5, h: 5.8, rot: 0.08 },  // rear left behind wizard
+          { x: -5.5, z: -9.2, h: 6.5, rot: -0.05 }, // deep rear left
+          { x: 1.0,  z: -10.5, h: 7.5, rot: 0.04 }, // rear center
+          { x: 7.5,  z: -8.8, h: 5.2, rot: 0.12 },  // rear right
+          { x: 10.5, z: -4.5, h: 6.0, rot: -0.08 }, // rear right behind monolith
+          { x: -11.0, z: 3.5, h: 4.2, rot: -0.15 }, // proscenium flank left
+          { x: 11.8,  z: 4.5, h: 3.8, rot: 0.18 }   // proscenium flank right
+        ];
+
+        columnPositions.forEach((cp) => {
+          const colMesh = new THREE.Mesh(columnGeo, matAltar);
+          colMesh.scale.y = cp.h / 6.5;
+          colMesh.position.set(cp.x, cp.h / 2 - 0.2, cp.z);
+          colMesh.rotation.z = cp.rot;
+          colMesh.castShadow = true;
+          colMesh.receiveShadow = true;
+          this.scene.add(colMesh);
+
+          // Capital or broken top slab
+          const capGeo = new THREE.BoxGeometry(1.6, 0.35, 1.6);
+          const capMesh = new THREE.Mesh(capGeo, matAltar);
+          capMesh.position.set(cp.x, cp.h + 0.1, cp.z);
+          capMesh.rotation.z = cp.rot;
+          capMesh.castShadow = true;
+          this.scene.add(capMesh);
+        });
+
+        // Weathered Fallen Column Drum on dais perimeter
+        const fallenGeo = new THREE.CylinderGeometry(0.7, 0.75, 2.2, 8);
+        const fallenMesh = new THREE.Mesh(fallenGeo, matAltar);
+        fallenMesh.position.set(-2.5, 0.45, 9.2);
+        fallenMesh.rotation.set(0.1, 0.4, Math.PI / 2);
+        fallenMesh.castShadow = true;
+        fallenMesh.receiveShadow = true;
+        this.scene.add(fallenMesh);
+
+        // --- 4. The Target Monolith (Destination of the Spell) ---
+        // Positioned at x = 11.5 across the dais
+        this.targetMonolith = new THREE.Group();
+        this.targetMonolith.position.set(11.5, 0, 0);
+        this.scene.add(this.targetMonolith);
+
+        // Craggy Tapered Standing Stone
+        const monoGeo = new THREE.CylinderGeometry(0.8, 1.5, 7.5, 6);
+        const matMono = new THREE.MeshStandardMaterial({
+          color: 0x3d435e,
+          roughness: 0.75,
+          metalness: 0.2,
+          flatShading: true
+        });
+        const monoMesh = new THREE.Mesh(monoGeo, matMono);
+        monoMesh.position.y = 3.75;
+        monoMesh.castShadow = true;
+        monoMesh.receiveShadow = true;
+        this.targetMonolith.add(monoMesh);
+
+        // Glowing Arcane Ward Sigils on Monolith Face
+        for (let i = 0; i < 4; i++) {
+          const wardGeo = new THREE.TorusGeometry(0.35 + i * 0.15, 0.03, 4, 8);
+          const matWard = new THREE.MeshStandardMaterial({
+            color: 0x00f0ff,
+            emissive: 0x00d4ff,
+            emissiveIntensity: 1.2,
+            roughness: 0.2
+          });
+          const wardMesh = new THREE.Mesh(wardGeo, matWard);
+          wardMesh.position.set(-0.95, 2.5 + i * 0.9, 0);
+          wardMesh.rotation.y = Math.PI / 2;
+          this.targetMonolith.add(wardMesh);
+          this.monolithRunes.push(wardMesh);
+        }
+
+        // Target Impact Detonation Light
+        this.monolithLight = new THREE.PointLight(0x00f0ff, 0, 28, 2.0);
+        this.monolithLight.position.set(-1.0, 3.5, 0);
+        this.targetMonolith.add(this.monolithLight);
+
+        // --- 5. Massive Radiant Moon ---
+        const moonTex = Textures.createMoonTexture();
+        const moonGeo = new THREE.SphereGeometry(7.5, 32, 32);
+        const matMoon = new THREE.MeshBasicMaterial({
+          map: moonTex,
+          color: 0xf5f8ff
+        });
+        const moonMesh = new THREE.Mesh(moonGeo, matMoon);
+        moonMesh.position.set(-8.5, 15.5, -36.0);
+        this.scene.add(moonMesh);
+
+        // Moon Soft Atmospheric Halo Glow Shell
+        const haloGeo = new THREE.SphereGeometry(8.8, 32, 32);
+        const matHalo = new THREE.MeshBasicMaterial({
+          color: 0x7da8ff,
+          transparent: true,
+          opacity: 0.25,
+          blending: THREE.AdditiveBlending,
+          side: THREE.BackSide
+        });
+        const haloMesh = new THREE.Mesh(haloGeo, matHalo);
+        haloMesh.position.copy(moonMesh.position);
+        this.scene.add(haloMesh);
+
+        // --- 6. Distant Mountain Silhouette Ranges ---
+        const mountainMats = [
+          new THREE.MeshBasicMaterial({ color: 0x14162e }), // Mid
+          new THREE.MeshBasicMaterial({ color: 0x0a0c1b })  // Far
+        ];
+
+        for (let m = 0; m < 2; m++) {
+          const numPeaks = 9;
+          const dist = m === 0 ? 55 : 85;
+          const yBase = m === 0 ? -12 : -18;
+          for (let p = 0; p < numPeaks; p++) {
+            const peakGeo = new THREE.ConeGeometry(14 + p * 3, 26 + (p % 4) * 8, 4);
+            const peakMesh = new THREE.Mesh(peakGeo, mountainMats[m]);
+            const angle = ((p - numPeaks / 2) * 0.28);
+            peakMesh.position.set(
+              Math.sin(angle) * dist,
+              yBase + (p % 3) * 3,
+              -Math.cos(angle) * dist
+            );
+            peakMesh.rotation.y = p * 0.8;
+            this.scene.add(peakMesh);
+          }
+        }
+
+        // --- 7. Rich Twinkling Starfield ---
+        const starCount = 1400;
+        const starGeo = new THREE.BufferGeometry();
+        const starPositions = new Float32Array(starCount * 3);
+        const starColors = new Float32Array(starCount * 3);
+
+        const paletteStars = [
+          new THREE.Color(0xffffff),
+          new THREE.Color(0xb2d4ff),
+          new THREE.Color(0x8ee8ff),
+          new THREE.Color(0xffd5a3)
+        ];
+
+        for (let i = 0; i < starCount; i++) {
+          const theta = Math.random() * Math.PI * 2;
+          const phi = Math.acos(Math.random() * 0.95); // Upper dome
+          const r = 95 + Math.random() * 15;
+
+          starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+          starPositions[i * 3 + 1] = r * Math.cos(phi) - 2;
+          starPositions[i * 3 + 2] = -Math.abs(r * Math.sin(phi) * Math.sin(theta));
+
+          const col = paletteStars[Math.floor(Math.random() * paletteStars.length)];
+          starColors[i * 3] = col.r;
+          starColors[i * 3 + 1] = col.g;
+          starColors[i * 3 + 2] = col.b;
+        }
+
+        starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+        starGeo.setAttribute('color', new THREE.BufferAttribute(starColors, 3));
+
+        const matStar = new THREE.PointsMaterial({
+          size: 1.4,
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.85,
+          map: Textures.createSparkleSprite(),
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        this.starsMesh = new THREE.Points(starGeo, matStar);
+        this.scene.add(this.starsMesh);
+
+        // --- 8. Ground Mist / Atmospheric Low Fog Layers ---
+        for (let i = 0; i < 3; i++) {
+          const mistGeo = new THREE.PlaneGeometry(36, 36);
+          const matMist = new THREE.MeshBasicMaterial({
+            color: 0x182442,
+            transparent: true,
+            opacity: 0.12 - i * 0.03,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          });
+          const mistPlane = new THREE.Mesh(mistGeo, matMist);
+          mistPlane.rotation.x = -Math.PI / 2;
+          mistPlane.position.set(0, 0.1 + i * 0.35, 0);
+          this.scene.add(mistPlane);
+          this.mistPlanes.push(mistPlane);
+        }
+      }
+
+      update(time, chargeIntensity) {
+        // Pulse Altar Floor Runes based on charging intensity
+        if (this.runesMesh) {
+          this.runesMesh.rotation.z = time * 0.05;
+          const baseAlpha = 0.4 + 0.15 * Math.sin(time * 2.0);
+          this.runesMesh.material.opacity = baseAlpha + chargeIntensity * 0.55;
+        }
+
+        // Drifting low mist rotation
+        this.mistPlanes.forEach((plane, idx) => {
+          plane.rotation.z = time * (0.015 + idx * 0.01);
+        });
+
+        // Subtle twinkling of starfield
+        if (this.starsMesh) {
+          this.starsMesh.material.size = 1.3 + 0.3 * Math.sin(time * 3.5);
+        }
+      }
+
+      triggerImpactFlash() {
+        if (this.monolithLight) {
+          this.monolithLight.intensity = 28.0;
+        }
+        this.monolithRunes.forEach((r) => {
+          r.material.emissiveIntensity = 8.0;
+        });
+      }
+
+      decayImpactLight(dt) {
+        if (this.monolithLight && this.monolithLight.intensity > 0.01) {
+          this.monolithLight.intensity = THREE.MathUtils.lerp(this.monolithLight.intensity, 0, dt * 6.0);
+        }
+        this.monolithRunes.forEach((r) => {
+          if (r.material.emissiveIntensity > 1.2) {
+            r.material.emissiveIntensity = THREE.MathUtils.lerp(r.material.emissiveIntensity, 1.2, dt * 5.0);
+          }
+        });
+      }
+    }
+
+    // =========================================================================
+    // 5. MAGIC & PARTICLE SYSTEM (Spiral Vortex, Projectile, Burst, Detonation)
+    // =========================================================================
+    const _scratchVec1 = new THREE.Vector3();
+    const _scratchVec2 = new THREE.Vector3();
+    const _scratchDir = new THREE.Vector3();
+
+    class ParticleEngine {
+      constructor(scene) {
+        this.scene = scene;
+        this.glowTex = Textures.createGlowSprite();
+        this.sparkTex = Textures.createSparkleSprite();
+
+        // 1. Inward Spiral Vortex Particles (Charging)
+        this.MAX_VORTEX = 280;
+        this.vortexGeo = new THREE.BufferGeometry();
+        this.vortexPos = new Float32Array(this.MAX_VORTEX * 3);
+        this.vortexCol = new Float32Array(this.MAX_VORTEX * 3);
+        this.vortexRadii = new Float32Array(this.MAX_VORTEX);
+        this.vortexAngles = new Float32Array(this.MAX_VORTEX);
+        this.vortexY = new Float32Array(this.MAX_VORTEX);
+        this.vortexSpeed = new Float32Array(this.MAX_VORTEX);
+
+        for (let i = 0; i < this.MAX_VORTEX; i++) {
+          this.resetVortexParticle(i, 0);
+          this.vortexPos[i * 3] = 0;
+          this.vortexPos[i * 3 + 1] = -100; // Hidden initially
+          this.vortexPos[i * 3 + 2] = 0;
+        }
+
+        this.vortexGeo.setAttribute('position', new THREE.BufferAttribute(this.vortexPos, 3));
+        this.vortexGeo.setAttribute('color', new THREE.BufferAttribute(this.vortexCol, 3));
+
+        const matVortex = new THREE.PointsMaterial({
+          size: 1.1,
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.9,
+          map: this.glowTex,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        this.vortexPoints = new THREE.Points(this.vortexGeo, matVortex);
+        this.scene.add(this.vortexPoints);
+
+        // 2. High-Velocity Sparks Pool (Cast Burst & Impact Debris)
+        this.MAX_SPARKS = 220;
+        this.sparks = [];
+        const sparkGeo = new THREE.BufferGeometry();
+        this.sparkPos = new Float32Array(this.MAX_SPARKS * 3);
+        this.sparkCol = new Float32Array(this.MAX_SPARKS * 3);
+        sparkGeo.setAttribute('position', new THREE.BufferAttribute(this.sparkPos, 3));
+        sparkGeo.setAttribute('color', new THREE.BufferAttribute(this.sparkCol, 3));
+
+        for (let i = 0; i < this.MAX_SPARKS; i++) {
+          this.sparks.push({
+            active: false,
+            pos: new THREE.Vector3(0, -100, 0),
+            vel: new THREE.Vector3(),
+            life: 0,
+            maxLife: 1.0,
+            size: 1.0,
+            color: new THREE.Color()
+          });
+          this.sparkPos[i * 3 + 1] = -100;
+        }
+
+        const matSparks = new THREE.PointsMaterial({
+          size: 1.4,
+          vertexColors: true,
+          transparent: true,
+          opacity: 1.0,
+          map: this.sparkTex,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        this.sparkPoints = new THREE.Points(sparkGeo, matSparks);
+        this.scene.add(this.sparkPoints);
+
+        // 3. Shockwave Expanding Rings
+        this.shockwaves = [];
+        for (let i = 0; i < 4; i++) {
+          const ringGeo = new THREE.RingGeometry(0.1, 0.45, 32);
+          const matRing = new THREE.MeshBasicMaterial({
+            color: 0x00f0ff,
+            transparent: true,
+            opacity: 0,
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          });
+          const ringMesh = new THREE.Mesh(ringGeo, matRing);
+          ringMesh.visible = false;
+          this.scene.add(ringMesh);
+          this.shockwaves.push({
+            mesh: ringMesh,
+            active: false,
+            radius: 0.1,
+            maxRadius: 6.5,
+            life: 0,
+            maxLife: 0.6
+          });
+        }
+      }
+
+      resetVortexParticle(i, gemPos) {
+        this.vortexRadii[i] = 2.5 + Math.random() * 4.5;
+        this.vortexAngles[i] = Math.random() * Math.PI * 2;
+        this.vortexY[i] = (Math.random() - 0.5) * 3.5;
+        this.vortexSpeed[i] = 1.6 + Math.random() * 3.2;
+
+        const isElectric = Math.random() > 0.4;
+        this.vortexCol[i * 3] = isElectric ? 0.3 : 0.8;
+        this.vortexCol[i * 3 + 1] = isElectric ? 0.95 : 0.2;
+        this.vortexCol[i * 3 + 2] = 1.0;
+      }
+
+      updateVortex(dt, gemPos, chargeIntensity) {
+        if (chargeIntensity <= 0.01) {
+          // Hide vortex
+          for (let i = 0; i < this.MAX_VORTEX; i++) {
+            this.vortexPos[i * 3 + 1] = -100;
+          }
+          this.vortexGeo.attributes.position.needsUpdate = true;
+          return;
+        }
+
+        for (let i = 0; i < this.MAX_VORTEX; i++) {
+          this.vortexRadii[i] -= this.vortexSpeed[i] * dt * (1.0 + chargeIntensity * 2.5);
+          this.vortexAngles[i] += (3.5 + chargeIntensity * 6.0) * dt;
+          this.vortexY[i] *= Math.max(0, 1.0 - dt * 2.8);
+
+          if (this.vortexRadii[i] <= 0.25) {
+            this.resetVortexParticle(i, gemPos);
+          }
+
+          const r = this.vortexRadii[i];
+          const a = this.vortexAngles[i];
+          this.vortexPos[i * 3] = gemPos.x + Math.cos(a) * r;
+          this.vortexPos[i * 3 + 1] = gemPos.y + this.vortexY[i];
+          this.vortexPos[i * 3 + 2] = gemPos.z + Math.sin(a) * r;
+        }
+
+        this.vortexGeo.attributes.position.needsUpdate = true;
+      }
+
+      spawnShockwave(pos, normal, maxRadius, duration, colorHex) {
+        for (let i = 0; i < this.shockwaves.length; i++) {
+          const sw = this.shockwaves[i];
+          if (!sw.active) {
+            sw.active = true;
+            sw.radius = 0.2;
+            sw.maxRadius = maxRadius;
+            sw.life = 0;
+            sw.maxLife = duration;
+            sw.mesh.position.copy(pos);
+            sw.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+            sw.mesh.material.color.setHex(colorHex || 0x00f0ff);
+            sw.mesh.material.opacity = 0.95;
+            sw.mesh.scale.set(1, 1, 1);
+            sw.mesh.visible = true;
+            return;
+          }
+        }
+      }
+
+      spawnBurst(pos, count, speed, spreadConeDir, colorHex) {
+        let spawned = 0;
+        if (spreadConeDir) {
+          _scratchDir.copy(spreadConeDir).normalize();
+        }
+        for (let i = 0; i < this.MAX_SPARKS; i++) {
+          const sp = this.sparks[i];
+          if (!sp.active) {
+            sp.active = true;
+            sp.pos.copy(pos);
+            sp.life = 0;
+            sp.maxLife = 0.45 + Math.random() * 0.6;
+            sp.color.setHex(colorHex || 0x00f0ff);
+
+            if (spreadConeDir) {
+              // Directional cone burst forward
+              _scratchVec1.set(
+                (Math.random() - 0.5) * 0.9,
+                (Math.random() - 0.5) * 0.9,
+                (Math.random() - 0.5) * 0.9
+              );
+              _scratchVec2.copy(_scratchDir).add(_scratchVec1).normalize().multiplyScalar(speed * (0.6 + Math.random() * 0.8));
+              sp.vel.copy(_scratchVec2);
+            } else {
+              // Spherical radial burst
+              const theta = Math.random() * Math.PI * 2;
+              const phi = Math.acos(Math.random() * 2 - 1);
+              sp.vel.set(
+                Math.sin(phi) * Math.cos(theta),
+                Math.sin(phi) * Math.sin(theta),
+                Math.cos(phi)
+              ).multiplyScalar(speed * (0.4 + Math.random() * 0.9));
+            }
+
+            spawned++;
+            if (spawned >= count) break;
+          }
+        }
+      }
+
+      updateSparks(dt) {
+        for (let i = 0; i < this.MAX_SPARKS; i++) {
+          const sp = this.sparks[i];
+          if (sp.active) {
+            sp.life += dt;
+            if (sp.life >= sp.maxLife) {
+              sp.active = false;
+              this.sparkPos[i * 3 + 1] = -100;
+              continue;
+            }
+
+            // Gravity & air resistance
+            sp.vel.y -= 7.5 * dt;
+            sp.vel.multiplyScalar(0.96);
+            sp.pos.addScaledVector(sp.vel, dt);
+
+            // Ground bounce
+            if (sp.pos.y < 0.05) {
+              sp.pos.y = 0.05;
+              sp.vel.y *= -0.45;
+            }
+
+            const alpha = 1.0 - sp.life / sp.maxLife;
+            this.sparkPos[i * 3] = sp.pos.x;
+            this.sparkPos[i * 3 + 1] = sp.pos.y;
+            this.sparkPos[i * 3 + 2] = sp.pos.z;
+
+            this.sparkCol[i * 3] = sp.color.r * alpha;
+            this.sparkCol[i * 3 + 1] = sp.color.g * alpha;
+            this.sparkCol[i * 3 + 2] = sp.color.b * alpha;
+          }
+        }
+        this.sparkPoints.geometry.attributes.position.needsUpdate = true;
+        this.sparkPoints.geometry.attributes.color.needsUpdate = true;
+
+        // Update shockwave rings
+        this.shockwaves.forEach((sw) => {
+          if (sw.active) {
+            sw.life += dt;
+            const progress = sw.life / sw.maxLife;
+            if (progress >= 1.0) {
+              sw.active = false;
+              sw.mesh.visible = false;
+            } else {
+              const currentR = THREE.MathUtils.lerp(0.2, sw.maxRadius, Math.sin(progress * Math.PI * 0.5));
+              sw.mesh.scale.set(currentR, currentR, currentR);
+              sw.mesh.material.opacity = (1.0 - progress) * 0.9;
+            }
+          }
+        });
+      }
+    }
+
+    // =========================================================================
+    // 6. HIGH-POWER PROJECTILE SYSTEM (Arcane Bolt & Impact Kinematics)
+    // =========================================================================
+    class ProjectileSystem {
+      constructor(scene, particles, env) {
+        this.scene = scene;
+        this.particles = particles;
+        this.env = env;
+
+        this.group = new THREE.Group();
+        this.group.visible = false;
+        this.scene.add(this.group);
+
+        // Core Glowing Energy Sphere
+        const coreGeo = new THREE.SphereGeometry(0.42, 16, 16);
+        const matCore = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        this.coreMesh = new THREE.Mesh(coreGeo, matCore);
+        this.group.add(this.coreMesh);
+
+        // Surrounding Arcane Plasma Halo
+        const haloGeo = new THREE.SphereGeometry(0.85, 16, 16);
+        const matHalo = new THREE.MeshBasicMaterial({
+          color: 0x00f0ff,
+          transparent: true,
+          opacity: 0.65,
+          blending: THREE.AdditiveBlending
+        });
+        this.haloMesh = new THREE.Mesh(haloGeo, matHalo);
+        this.group.add(this.haloMesh);
+
+        // Spiraling Helical Energy Filaments
+        const filamentGeo = new THREE.TorusGeometry(0.75, 0.06, 6, 24);
+        const matFilament = new THREE.MeshBasicMaterial({
+          color: 0x67ffeb,
+          wireframe: true
+        });
+        this.filament1 = new THREE.Mesh(filamentGeo, matFilament);
+        this.filament2 = new THREE.Mesh(filamentGeo, matFilament);
+        this.filament2.rotation.x = Math.PI / 2;
+        this.group.add(this.filament1);
+        this.group.add(this.filament2);
+
+        // Traveling Dynamic Light Source
+        this.light = new THREE.PointLight(0x00f0ff, 6.5, 18, 1.8);
+        this.group.add(this.light);
+
+        // Kinematics state
+        this.active = false;
+        this.pos = new THREE.Vector3();
+        this.vel = new THREE.Vector3();
+        this.targetX = 10.5; // Monolith target position
+        this.trailTimer = 0;
+      }
+
+      launch(originPos, targetPos) {
+        this.active = true;
+        this.group.visible = true;
+        this.pos.copy(originPos);
+        this.group.position.copy(this.pos);
+
+        // Fast horizontal trajectory with slight rise
+        _scratchDir.subVectors(targetPos, originPos).normalize();
+        this.vel.copy(_scratchDir).multiplyScalar(28.0); // 28 units/sec
+        this.targetX = targetPos.x;
+      }
+
+      update(dt) {
+        if (!this.active) return;
+
+        this.pos.addScaledVector(this.vel, dt);
+        this.group.position.copy(this.pos);
+
+        // Spin energy filaments
+        this.filament1.rotation.z += 18.0 * dt;
+        this.filament2.rotation.y += 22.0 * dt;
+        this.coreMesh.scale.setScalar(1.0 + 0.15 * Math.sin(this.pos.x * 8.0));
+
+        // Spawn dense luminous spark trail behind projectile (zero allocations)
+        this.trailTimer += dt;
+        if (this.trailTimer > 0.018) {
+          this.trailTimer = 0;
+          _scratchVec1.copy(this.pos);
+          _scratchVec1.x -= 0.4;
+          _scratchVec1.y += (Math.random() - 0.5) * 0.2;
+          _scratchVec1.z += (Math.random() - 0.5) * 0.2;
+          _scratchDir.set(-1, 0, 0);
+          this.particles.spawnBurst(
+            _scratchVec1,
+            3,
+            2.5,
+            _scratchDir,
+            0x00f0ff
+          );
+        }
+
+        // Check Target Impact
+        if (this.pos.x >= this.targetX) {
+          this.detonate();
+        }
+      }
+
+      detonate() {
+        this.active = false;
+        this.group.visible = false;
+
+        const impactPoint = new THREE.Vector3(this.targetX, this.pos.y, this.pos.z);
+
+        // 1. Monolith Detonation Flash & Sigil Ignite
+        this.env.triggerImpactFlash();
+
+        // 2. Dual Shockwave Rings (Vertical & Horizontal)
+        this.particles.spawnShockwave(impactPoint, new THREE.Vector3(1, 0, 0), 8.5, 0.75, 0x00f0ff);
+        this.particles.spawnShockwave(impactPoint, new THREE.Vector3(0, 1, 0), 7.0, 0.65, 0x67ffeb);
+
+        // 3. Massive Blast of 90+ Radiant Sparks & Debris
+        this.particles.spawnBurst(impactPoint, 95, 14.0, null, 0x00f0ff);
+        this.particles.spawnBurst(impactPoint, 45, 8.5, null, 0xffffff);
+
+        // 4. Detonation Audio Thud & Resonance
+        audio.playImpactBoom();
+
+        // 5. Signal Camera Director for Impact Punch
+        if (window.director) {
+          window.director.addTrauma(0.95);
+        }
+      }
+    }
+
+    // =========================================================================
+    // 7. CINEMATIC CAMERA DIRECTOR (Presets, Damping, Trauma Shake)
+    // =========================================================================
+    class CameraDirector {
+      constructor(camera, domElement) {
+        this.camera = camera;
+        this.domElement = domElement;
+
+        // Current & Target Vectors for Silky Damped Transitions
+        this.currentPos = new THREE.Vector3(-1.5, 3.8, 13.5);
+        this.targetPos = new THREE.Vector3(-1.5, 3.8, 13.5);
+        this.currentLookAt = new THREE.Vector3(2.5, 2.6, 0);
+        this.targetLookAt = new THREE.Vector3(2.5, 2.6, 0);
+
+        this.trauma = 0.0; // 0 to 1 trauma shake accumulator
+        this.shakeTimer = 0;
+        this.mode = 'cinematic'; // 'cinematic', 'classic', 'hero', 'target', 'orbit'
+
+        // Free Orbit Parameters
+        this.orbitRadius = 14;
+        this.orbitTheta = 0.2;
+        this.orbitPhi = 1.35;
+        this.isDragging = false;
+        this.prevMouse = { x: 0, y: 0 };
+
+        this.initMouseControls();
+      }
+
+      initMouseControls() {
+        const onDown = (e) => {
+          this.isDragging = true;
+          this.prevMouse.x = e.clientX;
+          this.prevMouse.y = e.clientY;
+          // Switch to orbit mode if manually dragged
+          if (this.mode !== 'orbit') {
+            this.setPreset('orbit');
+          }
+        };
+
+        const onMove = (e) => {
+          if (!this.isDragging) return;
+          const dx = e.clientX - this.prevMouse.x;
+          const dy = e.clientY - this.prevMouse.y;
+          this.prevMouse.x = e.clientX;
+          this.prevMouse.y = e.clientY;
+
+          this.orbitTheta -= dx * 0.007;
+          this.orbitPhi = Math.max(0.2, Math.min(Math.PI * 0.48, this.orbitPhi - dy * 0.007));
+          this.updateOrbitPosition();
+        };
+
+        const onUp = () => {
+          this.isDragging = false;
+        };
+
+        const onWheel = (e) => {
+          e.preventDefault();
+          this.orbitRadius = Math.max(4, Math.min(28, this.orbitRadius + e.deltaY * 0.015));
+          if (this.mode !== 'orbit') this.setPreset('orbit');
+          this.updateOrbitPosition();
+        };
+
+        this.domElement.addEventListener('pointerdown', onDown);
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        this.domElement.addEventListener('wheel', onWheel, { passive: false });
+      }
+
+      updateOrbitPosition() {
+        const x = this.targetLookAt.x + this.orbitRadius * Math.sin(this.orbitPhi) * Math.sin(this.orbitTheta);
+        const y = this.targetLookAt.y + this.orbitRadius * Math.cos(this.orbitPhi);
+        const z = this.targetLookAt.z + this.orbitRadius * Math.sin(this.orbitPhi) * Math.cos(this.orbitTheta);
+        this.targetPos.set(x, y, z);
+      }
+
+      setPreset(name) {
+        this.mode = name;
+        document.querySelectorAll('.btn-chip[data-cam]').forEach((b) => {
+          b.classList.toggle('active', b.dataset.cam === name);
+        });
+
+        switch (name) {
+          case 'cinematic':
+            this.targetPos.set(-1.5, 3.8, 13.5);
+            this.targetLookAt.set(2.5, 2.6, 0);
+            break;
+          case 'classic': // V1 tribute: side-scroller view
+            this.targetPos.set(3.5, 3.0, 18.0);
+            this.targetLookAt.set(3.5, 3.0, 0);
+            break;
+          case 'hero': // Low dramatic angle silhouetted against giant moon
+            this.targetPos.set(-7.2, 1.2, 5.2);
+            this.targetLookAt.set(-3.8, 3.6, 0);
+            break;
+          case 'target': // Focused on the ancient monolith as spell approaches
+            this.targetPos.set(15.0, 3.2, 5.5);
+            this.targetLookAt.set(7.0, 3.0, 0);
+            break;
+          case 'orbit':
+            this.updateOrbitPosition();
+            break;
+        }
+      }
+
+      addTrauma(amount) {
+        this.trauma = Math.min(1.0, this.trauma + amount);
+      }
+
+      update(dt, totalTime) {
+        // Smooth Spring Damping toward Target Position
+        this.currentPos.lerp(this.targetPos, dt * 4.5);
+        this.currentLookAt.lerp(this.targetLookAt, dt * 5.0);
+
+        // Subtle Ambient Drift when in Cinematic Mode
+        const driftX = this.mode === 'cinematic' ? Math.sin(totalTime * 0.4) * 0.35 : 0;
+        const driftY = this.mode === 'cinematic' ? Math.cos(totalTime * 0.3) * 0.2 : 0;
+
+        // Trauma-Based Screen Shake (Frequency & Non-linear Falloff)
+        let shakeX = 0, shakeY = 0, shakeZ = 0;
+        if (this.trauma > 0.001) {
+          this.shakeTimer += dt * 38.0;
+          const shakeFactor = this.trauma * this.trauma; // Non-linear response
+          shakeX = (Math.sin(this.shakeTimer * 1.3) + (Math.random() - 0.5) * 0.5) * 0.55 * shakeFactor;
+          shakeY = (Math.cos(this.shakeTimer * 1.7) + (Math.random() - 0.5) * 0.5) * 0.55 * shakeFactor;
+          shakeZ = (Math.sin(this.shakeTimer * 0.9)) * 0.35 * shakeFactor;
+
+          this.trauma = Math.max(0, this.trauma - dt * 1.6); // Rapid smooth decay
+        }
+
+        this.camera.position.set(
+          this.currentPos.x + driftX + shakeX,
+          this.currentPos.y + driftY + shakeY,
+          this.currentPos.z + shakeZ
+        );
+
+        this.camera.lookAt(
+          this.currentLookAt.x + shakeX * 0.5,
+          this.currentLookAt.y + shakeY * 0.5,
+          this.currentLookAt.z
+        );
+      }
+    }
+
+    // =========================================================================
+    // 8. MASTER SPELL STATE MACHINE & GAME LOOP
+    // =========================================================================
+    const STATE_IDLE = 0;
+    const STATE_CHARGE = 1;
+    const STATE_CAST = 2;
+    const STATE_RECOVER = 3;
+
+    class App {
+      constructor() {
+        this.canvas = document.getElementById('webgl-canvas');
+        this.width = window.innerWidth;
+        this.height = window.innerHeight;
+
+        // Renderer
+        this.renderer = new THREE.WebGLRenderer({
+          canvas: this.canvas,
+          antialias: true,
+          powerPreference: 'high-performance'
+        });
+        this.renderer.setSize(this.width, this.height);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 1.18;
+
+        // Scene & Fog
+        this.scene = new THREE.Scene();
+        this.scene.background = new THREE.Color(0x060514);
+        this.scene.fog = new THREE.FogExp2(0x070618, 0.024);
+
+        // Camera
+        this.camera = new THREE.PerspectiveCamera(46, this.width / this.height, 0.2, 300);
+
+        // Lighting System
+        this.initLighting();
+
+        // Subsystems
+        this.env = new EnvironmentBuilder(this.scene);
+        this.wizard = new WizardCharacter(this.scene);
+        this.particles = new ParticleEngine(this.scene);
+        this.projectiles = new ProjectileSystem(this.scene, this.particles, this.env);
+        this.director = new CameraDirector(this.camera, this.canvas);
+        window.director = this.director;
+        window.app = this;
+
+        // Animation State Machine Timing
+        this.state = STATE_IDLE;
+        this.stateTime = 0;
+        this.totalTime = 0;
+        this.timeScale = 1.0;
+        this.autoLoop = true;
+
+        this.DUR_IDLE = 2.0;
+        this.DUR_CHARGE = 1.8;
+        this.DUR_CAST = 1.3;
+        this.DUR_RECOVER = 1.0;
+
+        // Temporary Vector scratchpad
+        this.gemWorldPos = new THREE.Vector3();
+
+        // UI references
+        this.uiDot = document.getElementById('state-dot');
+        this.uiText = document.getElementById('state-text');
+        this.uiFill = document.getElementById('state-fill');
+
+        this.initEventListeners();
+        this.updateUIState();
+
+        this.clock = new THREE.Clock();
+        this.animate = this.animate.bind(this);
+        requestAnimationFrame(this.animate);
+      }
+
+      initLighting() {
+        // Deep Indigo/Navy Ambient Fill Light
+        const ambLight = new THREE.AmbientLight(0x221d48, 0.75);
+        this.scene.add(ambLight);
+
+        // Celestial Moonlight Directional Light (Casting Soft Shadows from front-left)
+        this.moonLight = new THREE.DirectionalLight(0xd5e6ff, 1.8);
+        this.moonLight.position.set(-10, 26, 12);
+        this.moonLight.castShadow = true;
+        this.moonLight.shadow.mapSize.width = 2048;
+        this.moonLight.shadow.mapSize.height = 2048;
+        this.moonLight.shadow.camera.near = 0.5;
+        this.moonLight.shadow.camera.far = 75;
+        this.moonLight.shadow.camera.left = -16;
+        this.moonLight.shadow.camera.right = 16;
+        this.moonLight.shadow.camera.top = 16;
+        this.moonLight.shadow.camera.bottom = -16;
+        this.moonLight.shadow.bias = -0.0006;
+        this.scene.add(this.moonLight);
+
+        // Soft frontal fill light to bring out rich robe plum/magenta tones and beard
+        const frontFill = new THREE.DirectionalLight(0x5c72a8, 0.65);
+        frontFill.position.set(4, 8, 16);
+        this.scene.add(frontFill);
+
+        // Silvery Back/Rim Light for Wizard Silhouette
+        const rimLight = new THREE.DirectionalLight(0x7da4ff, 0.9);
+        rimLight.position.set(12, 14, -16);
+        this.scene.add(rimLight);
+      }
+
+      initEventListeners() {
+        window.addEventListener('resize', () => {
+          this.width = window.innerWidth;
+          this.height = window.innerHeight;
+          this.camera.aspect = this.width / this.height;
+          this.camera.updateProjectionMatrix();
+          this.renderer.setSize(this.width, this.height);
+        });
+
+        // Trigger Spell Button & Spacebar Shortcut
+        const btnCast = document.getElementById('btn-cast-now');
+        const triggerCast = () => {
+          audio.handleUserInteraction();
+          if (this.state === STATE_IDLE || this.state === STATE_RECOVER) {
+            this.setState(STATE_CHARGE);
+          } else if (this.state === STATE_CHARGE) {
+            this.setState(STATE_CAST);
+          }
+        };
+
+        window.addEventListener('pointerdown', () => {
+          audio.handleUserInteraction();
+        });
+
+        btnCast.addEventListener('click', triggerCast);
+        window.addEventListener('keydown', (e) => {
+          audio.handleUserInteraction();
+          if (e.code === 'Space') {
+            e.preventDefault();
+            triggerCast();
+          } else if (e.code === 'KeyH') {
+            document.getElementById('ui-container').classList.toggle('ui-hidden');
+          }
+        });
+
+        // Camera Preset Buttons
+        document.querySelectorAll('.btn-chip[data-cam]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            this.director.setPreset(btn.dataset.cam);
+          });
+        });
+
+        // Speed Buttons
+        document.querySelectorAll('.btn-chip[data-speed]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            document.querySelectorAll('.btn-chip[data-speed]').forEach((b) => b.classList.remove('active'));
+            btn.classList.add('active');
+            this.timeScale = parseFloat(btn.dataset.speed);
+          });
+        });
+
+        // Loop Toggle
+        const btnLoop = document.getElementById('btn-loop');
+        btnLoop.addEventListener('click', () => {
+          this.autoLoop = !this.autoLoop;
+          btnLoop.classList.toggle('active', this.autoLoop);
+        });
+
+        // Audio Toggle
+        const btnAudio = document.getElementById('btn-audio');
+        btnAudio.addEventListener('click', () => {
+          const isEnabled = audio.toggle();
+          btnAudio.textContent = isEnabled ? '🔊' : '🔇';
+          btnAudio.classList.toggle('active', isEnabled);
+        });
+
+        // UI Toggle
+        const btnUI = document.getElementById('btn-ui-toggle');
+        btnUI.addEventListener('click', () => {
+          document.getElementById('ui-container').classList.toggle('ui-hidden');
+        });
+      }
+
+      setState(newState) {
+        this.state = newState;
+        this.stateTime = 0;
+        this.updateUIState();
+
+        if (this.state === STATE_CHARGE) {
+          audio.playChargeStart(this.DUR_CHARGE / this.timeScale);
+        } else if (this.state === STATE_CAST) {
+          // Immediately pose wizard into initial cast strike so gemWorldPos matches the forward staff thrust
+          this.wizard.setPoseCast(0.10, this.totalTime);
+          this.wizard.getGemWorldPosition(this.gemWorldPos);
+
+          // Trigger Explosive Cast Release!
+          audio.playCastBurst();
+          this.director.addTrauma(0.85);
+
+          // Spawn Shockwave & Spark Burst from Gem
+          this.particles.spawnShockwave(
+            this.gemWorldPos,
+            new THREE.Vector3(1, 0, 0),
+            5.5,
+            0.5,
+            0x00f0ff
+          );
+
+          this.particles.spawnBurst(
+            this.gemWorldPos,
+            75,
+            12.0,
+            new THREE.Vector3(1, 0.15, 0),
+            0x00f0ff
+          );
+
+          // Launch Arcane Projectile toward Target Monolith
+          const targetPos = new THREE.Vector3(11.0, 3.5, 0);
+          this.projectiles.launch(this.gemWorldPos, targetPos);
+        }
+      }
+
+      updateUIState() {
+        const stateConfig = [
+          { name: 'IDLE', color: '#7388aa' },
+          { name: 'CHARGE', color: '#00f0ff' },
+          { name: 'CAST', color: '#ff3d85' },
+          { name: 'RECOVER', color: '#ffd147' }
+        ];
+
+        const cfg = stateConfig[this.state];
+        this.uiText.textContent = cfg.name;
+        this.uiText.style.color = cfg.color;
+        this.uiDot.style.background = cfg.color;
+        this.uiDot.style.boxShadow = `0 0 12px ${cfg.color}`;
+      }
+
+      animate() {
+        requestAnimationFrame(this.animate);
+
+        const rawDt = this.clock.getDelta();
+        const dt = Math.min(rawDt, 0.1) * this.timeScale;
+        this.totalTime += dt;
+        this.stateTime += dt;
+
+        // --- State Machine Transitions & Blends ---
+        let chargeIntensity = 0.0;
+        let progress = 0.0;
+
+        switch (this.state) {
+          case STATE_IDLE:
+            progress = this.stateTime / this.DUR_IDLE;
+            this.wizard.setPoseIdle(progress, this.totalTime);
+            chargeIntensity = 0.0;
+            if (this.autoLoop && this.stateTime >= this.DUR_IDLE) {
+              this.setState(STATE_CHARGE);
+            }
+            break;
+
+          case STATE_CHARGE:
+            progress = this.stateTime / this.DUR_CHARGE;
+            chargeIntensity = progress;
+            this.wizard.setPoseCharge(progress, this.totalTime);
+            if (this.stateTime >= this.DUR_CHARGE) {
+              this.setState(STATE_CAST);
+            }
+            break;
+
+          case STATE_CAST:
+            progress = this.stateTime / this.DUR_CAST;
+            this.wizard.setPoseCast(progress, this.totalTime);
+            chargeIntensity = Math.max(0, 1.0 - progress * 2.0);
+            if (this.stateTime >= this.DUR_CAST) {
+              this.setState(STATE_RECOVER);
+            }
+            break;
+
+          case STATE_RECOVER:
+            progress = this.stateTime / this.DUR_RECOVER;
+            this.wizard.setPoseRecover(progress, this.totalTime);
+            chargeIntensity = 0.0;
+            if (this.stateTime >= this.DUR_RECOVER) {
+              this.setState(STATE_IDLE);
+            }
+            break;
+        }
+
+        // Current Gem World Position from freshly updated pose
+        this.wizard.getGemWorldPosition(this.gemWorldPos);
+
+        // Update UI Progress Bar
+        const displayProgress = this.autoLoop
+          ? Math.min(100, Math.max(0, progress * 100))
+          : (this.state === STATE_IDLE ? 0 : Math.min(100, Math.max(0, progress * 100)));
+        this.uiFill.style.width = `${displayProgress}%`;
+
+        // Update Subsystems
+        this.particles.updateVortex(dt, this.gemWorldPos, chargeIntensity);
+        this.particles.updateSparks(dt);
+        this.projectiles.update(dt);
+        this.env.update(this.totalTime, chargeIntensity);
+        this.env.decayImpactLight(dt);
+        this.director.update(dt, this.totalTime);
+
+        // Render Scene
+        this.renderer.render(this.scene, this.camera);
+      }
+    }
+
+    // Launch Application once DOM is ready with robust error handling
+    window.addEventListener('DOMContentLoaded', () => {
+      if (typeof THREE === 'undefined') {
+        const banner = document.createElement('div');
+        banner.style.position = 'fixed';
+        banner.style.top = '50%';
+        banner.style.left = '50%';
+        banner.style.transform = 'translate(-50%, -50%)';
+        banner.style.padding = '24px 36px';
+        banner.style.background = 'rgba(15, 10, 32, 0.96)';
+        banner.style.border = '2px solid #00f0ff';
+        banner.style.borderRadius = '14px';
+        banner.style.color = '#ffffff';
+        banner.style.textAlign = 'center';
+        banner.style.zIndex = '99999';
+        banner.style.boxShadow = '0 0 40px rgba(0, 240, 255, 0.4)';
+        banner.innerHTML = `
+          <h2 style="font-size:22px;letter-spacing:2px;color:#00f0ff;margin-bottom:12px;">Three.js CDN Required</h2>
+          <p style="color:#c5d8f7;font-size:14px;line-height:1.6;max-width:440px;">
+            This 3D scene requires Three.js. Please verify your internet connection so the CDN library can load, or save a local <code>three.min.js</code> copy.
+          </p>
+        `;
+        document.body.appendChild(banner);
+        return;
+      }
+
+      try {
+        new App();
+      } catch (err) {
+        console.error('Fatal initialization error in Wizard V2:', err);
+      }
+    });
+  })();
+  </script>
+</body>
+</html>
