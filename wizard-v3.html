@@ -502,6 +502,9 @@
         this.enabled = false;
         this.masterGain = null;
         this.windGain = null;
+        this.chargeOsc = null;
+        this.chargeGain = null;
+        this.cachedNoiseBuffer = null;
       }
 
       init() {
@@ -512,6 +515,15 @@
           this.masterGain = this.ctx.createGain();
           this.masterGain.gain.setValueAtTime(this.enabled ? 0.75 : 0, this.ctx.currentTime);
           this.masterGain.connect(this.ctx.destination);
+
+          // Pre-allocate reusable noise buffer (Phase 4 requirement)
+          const bufLen = this.ctx.sampleRate * 2;
+          this.cachedNoiseBuffer = this.ctx.createBuffer(1, bufLen, this.ctx.sampleRate);
+          const data = this.cachedNoiseBuffer.getChannelData(0);
+          for (let i = 0; i < bufLen; i++) {
+            data[i] = Math.random() * 2 - 1;
+          }
+
           this.startWindAmbience();
         } catch (e) {
           console.warn('Web Audio not available:', e);
@@ -536,24 +548,25 @@
         if (this.masterGain) {
           this.masterGain.gain.setTargetAtTime(this.enabled ? 0.75 : 0, this.ctx.currentTime, 0.05);
         }
+        if (!this.enabled) {
+          this.stopChargeVoice();
+        }
         return this.enabled;
       }
 
-      startWindAmbience() {
+      onVisibilityChange(visible) {
         if (!this.ctx) return;
-        const bufferSize = this.ctx.sampleRate * 2;
-        const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-        const output = noiseBuffer.getChannelData(0);
-        let lastOut = 0.0;
-        for (let i = 0; i < bufferSize; i++) {
-          const white = Math.random() * 2 - 1;
-          output[i] = (lastOut + 0.02 * white) / 1.02;
-          lastOut = output[i];
-          output[i] *= 2.8;
+        if (!visible) {
+          this.stopChargeVoice();
+        } else if (this.enabled && this.ctx.state === 'suspended') {
+          this.ctx.resume().catch(() => {});
         }
+      }
 
+      startWindAmbience() {
+        if (!this.ctx || !this.cachedNoiseBuffer) return;
         const whiteNoise = this.ctx.createBufferSource();
-        whiteNoise.buffer = noiseBuffer;
+        whiteNoise.buffer = this.cachedNoiseBuffer;
         whiteNoise.loop = true;
 
         const filter = this.ctx.createBiquadFilter();
@@ -571,56 +584,100 @@
         whiteNoise.start();
       }
 
-      playChargeStart(duration) {
+      // Phase 4/5 Retained Charge Voice: Follows exact visual energy envelope
+      startChargeVoice() {
         if (!this.enabled || !this.ctx) return;
+        if (this.chargeOsc) return;
+
+        try {
+          const now = this.ctx.currentTime;
+          this.chargeOsc = this.ctx.createOscillator();
+          this.chargeGain = this.ctx.createGain();
+
+          this.chargeOsc.type = 'triangle';
+          this.chargeOsc.frequency.setValueAtTime(110, now);
+
+          this.chargeGain.gain.setValueAtTime(0.001, now);
+
+          this.chargeOsc.connect(this.chargeGain);
+          this.chargeGain.connect(this.masterGain);
+
+          this.chargeOsc.start(now);
+        } catch (e) {
+          console.warn('Error starting charge voice:', e);
+        }
+      }
+
+      updateChargeVoice(chargeEnergy) {
+        if (!this.enabled || !this.ctx) return;
+        if (chargeEnergy <= 0.001) {
+          this.stopChargeVoice();
+          return;
+        }
+        if (!this.chargeOsc) {
+          this.startChargeVoice();
+        }
+        if (!this.chargeGain || !this.chargeOsc) return;
         const now = this.ctx.currentTime;
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
+        const freq = 110 + chargeEnergy * 560; // 110 Hz up to 670 Hz
+        const targetGain = Math.max(0.001, chargeEnergy * 0.32);
 
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(120, now);
-        osc.frequency.exponentialRampToValueAtTime(740, now + duration);
+        this.chargeOsc.frequency.setTargetAtTime(freq, now, 0.04);
+        this.chargeGain.gain.setTargetAtTime(targetGain, now, 0.04);
+      }
 
-        gain.gain.setValueAtTime(0.01, now);
-        gain.gain.linearRampToValueAtTime(0.45, now + duration * 0.85);
-        gain.gain.linearRampToValueAtTime(0.0, now + duration);
-
-        osc.connect(gain);
-        gain.connect(this.masterGain);
-
-        osc.start(now);
-        osc.stop(now + duration);
+      stopChargeVoice() {
+        if (!this.ctx) return;
+        if (this.chargeGain) {
+          const now = this.ctx.currentTime;
+          this.chargeGain.gain.setTargetAtTime(0.0001, now, 0.03);
+          this.chargeGain = null;
+        }
+        if (this.chargeOsc) {
+          const osc = this.chargeOsc;
+          this.chargeOsc = null;
+          setTimeout(() => {
+            try {
+              osc.stop();
+              osc.disconnect();
+            } catch (e) {}
+          }, 50);
+        }
       }
 
       playCastBurst() {
         if (!this.enabled || !this.ctx) return;
+        this.stopChargeVoice();
+
         const now = this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
 
         osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(880, now);
-        osc.frequency.exponentialRampToValueAtTime(140, now + 0.35);
+        osc.frequency.setValueAtTime(840, now);
+        osc.frequency.exponentialRampToValueAtTime(120, now + 0.32);
 
         gain.gain.setValueAtTime(0.55, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
 
         osc.connect(gain);
         gain.connect(this.masterGain);
 
         osc.start(now);
-        osc.stop(now + 0.35);
+        osc.stop(now + 0.32);
       }
 
       playImpactBoom() {
         if (!this.enabled || !this.ctx) return;
         const now = this.ctx.currentTime;
+
+        // Sub-bass sine transient
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
 
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(160, now);
-        osc.frequency.exponentialRampToValueAtTime(32, now + 0.65);
+        osc.frequency.setValueAtTime(150, now);
+        osc.frequency.exponentialRampToValueAtTime(30, now + 0.65);
 
         gain.gain.setValueAtTime(0.85, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
@@ -630,6 +687,28 @@
 
         osc.start(now);
         osc.stop(now + 0.65);
+
+        // Crack transient using cached noise buffer
+        if (this.cachedNoiseBuffer) {
+          const noise = this.ctx.createBufferSource();
+          noise.buffer = this.cachedNoiseBuffer;
+          const noiseFilter = this.ctx.createBiquadFilter();
+          noiseFilter.type = 'bandpass';
+          noiseFilter.frequency.setValueAtTime(1200, now);
+          noiseFilter.frequency.exponentialRampToValueAtTime(200, now + 0.25);
+          noiseFilter.Q.setValueAtTime(3.0, now);
+
+          const noiseGain = this.ctx.createGain();
+          noiseGain.gain.setValueAtTime(0.5, now);
+          noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+
+          noise.connect(noiseFilter);
+          noiseFilter.connect(noiseGain);
+          noiseGain.connect(this.masterGain);
+
+          noise.start(now);
+          noise.stop(now + 0.25);
+        }
       }
     }
 
@@ -709,6 +788,60 @@
         ctx.fill();
         ctx.lineWidth = 3;
         ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = 8;
+        return tex;
+      },
+
+      // Localized Floor Rune Disc with Masked Radial Gradient (Phase 5 requirement)
+      createLocalRuneDisc: function () {
+        const size = 512;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        const cy = size / 2;
+
+        ctx.clearRect(0, 0, size, size);
+
+        // Soft radial gradient falloff to mask edges and localize around caster
+        const radGrad = ctx.createRadialGradient(cx, cy, 25, cx, cy, 240);
+        radGrad.addColorStop(0, 'rgba(0, 240, 255, 0.55)');
+        radGrad.addColorStop(0.35, 'rgba(0, 240, 255, 0.32)');
+        radGrad.addColorStop(0.70, 'rgba(0, 180, 255, 0.12)');
+        radGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = radGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 245, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Concentric focused rings under wizard feet
+        ctx.strokeStyle = '#00f0ff';
+        ctx.shadowColor = '#00f0ff';
+        ctx.shadowBlur = 8;
+        const rings = [210, 175, 130, 85];
+        rings.forEach((r, idx) => {
+          ctx.beginPath();
+          ctx.lineWidth = idx % 2 === 0 ? 3 : 1.5;
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.stroke();
+        });
+
+        // 6-Point Star runes
+        ctx.beginPath();
+        ctx.lineWidth = 1.8;
+        for (let i = 0; i < 6; i++) {
+          const a = (i * Math.PI * 2) / 6;
+          const r1 = 175;
+          const r2 = 85;
+          ctx.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+          ctx.lineTo(cx + Math.cos(a + Math.PI / 6) * r2, cy + Math.sin(a + Math.PI / 6) * r2);
+          ctx.lineTo(cx + Math.cos(a + Math.PI / 3) * r1, cy + Math.sin(a + Math.PI / 3) * r1);
+        }
         ctx.stroke();
 
         const tex = new THREE.CanvasTexture(canvas);
@@ -980,7 +1113,7 @@
           beltPouch: null
         };
 
-        // Cache initial rest transforms for complete deterministic reset
+        // Cache initial rest transforms for complete deterministic reset (Phase 4 Pose Ownership)
         this.restPose = {
           rootPos: new THREE.Vector3(-4.5, 0, 0),
           bodyPos: new THREE.Vector3(0, 0, 0),
@@ -990,11 +1123,56 @@
           rightForearmRot: new THREE.Euler(0.30, 0, 0),
           staffGroupRot: new THREE.Euler(-0.20, 0, 0.25), // Staff held outward/side, gem to left of hat
           leftArmRot: new THREE.Euler(-0.15, 0.05, -0.32),
-          leftForearmRot: new THREE.Euler(0.38, 0, 0.12)
+          leftForearmRot: new THREE.Euler(0.38, 0, 0.12),
+          beard0Rot: new THREE.Euler(-0.22, 0, 0),
+          beard1Rot: new THREE.Euler(-0.12, 0, 0),
+          beard2Rot: new THREE.Euler(0.08, 0, 0),
+          robeRotY: 0.0
         };
 
         this.hatSpineJoints = [];
         this.buildWizard();
+      }
+
+      capturePoseSnapshot() {
+        return {
+          rootPos: this.nodes.root.position.clone(),
+          bodyPos: this.nodes.body.position.clone(),
+          chestRot: this.nodes.chest.rotation.clone(),
+          headRot: this.nodes.head.rotation.clone(),
+          rightArmRot: this.nodes.rightArm.rotation.clone(),
+          rightForearmRot: this.nodes.rightForearm.rotation.clone(),
+          staffGroupRot: this.nodes.staffGroup.rotation.clone(),
+          leftArmRot: this.nodes.leftArm.rotation.clone(),
+          leftForearmRot: this.nodes.leftForearm.rotation.clone(),
+          beard0Rot: this.nodes.beardSegments[0] ? this.nodes.beardSegments[0].rotation.clone() : new THREE.Euler(-0.22, 0, 0),
+          beard1Rot: this.nodes.beardSegments[1] ? this.nodes.beardSegments[1].rotation.clone() : new THREE.Euler(-0.12, 0, 0),
+          beard2Rot: this.nodes.beardSegments[2] ? this.nodes.beardSegments[2].rotation.clone() : new THREE.Euler(0.08, 0, 0),
+          hatRots: this.nodes.hatSegments.map(s => s.rotation.clone()),
+          robeRotY: this.nodes.robeMesh ? this.nodes.robeMesh.rotation.y : 0.0
+        };
+      }
+
+      resetToRest() {
+        this.nodes.root.position.copy(this.restPose.rootPos);
+        this.nodes.body.position.copy(this.restPose.bodyPos);
+        this.nodes.chest.rotation.copy(this.restPose.chestRot);
+        this.nodes.head.rotation.copy(this.restPose.headRot);
+        this.nodes.rightArm.rotation.copy(this.restPose.rightArmRot);
+        this.nodes.rightForearm.rotation.copy(this.restPose.rightForearmRot);
+        this.nodes.staffGroup.rotation.copy(this.restPose.staffGroupRot);
+        this.nodes.leftArm.rotation.copy(this.restPose.leftArmRot);
+        this.nodes.leftForearm.rotation.copy(this.restPose.leftForearmRot);
+        if (this.nodes.beardSegments[0]) this.nodes.beardSegments[0].rotation.copy(this.restPose.beard0Rot);
+        if (this.nodes.beardSegments[1]) this.nodes.beardSegments[1].rotation.copy(this.restPose.beard1Rot);
+        if (this.nodes.beardSegments[2]) this.nodes.beardSegments[2].rotation.copy(this.restPose.beard2Rot);
+        for (let i = 0; i < 5; i++) {
+          if (this.nodes.hatSegments[i] && this.hatSpineJoints[i]) {
+            this.nodes.hatSegments[i].rotation.set(this.hatSpineJoints[i].restTiltX, 0, this.hatSpineJoints[i].restTiltZ);
+          }
+        }
+        if (this.nodes.robeMesh) this.nodes.robeMesh.rotation.y = this.restPose.robeRotY;
+        this.updateHatMesh();
       }
 
       buildWizard() {
@@ -1872,22 +2050,23 @@
         return targetVec;
       }
 
-      // --- Complete Parametric Posing & Transform Ownership ---
-      setPoseIdle(t, breath = 0) {
+      // --- Complete Parametric Posing & Transform Ownership (Phase 4) ---
+      setPoseIdle(progress, totalTime, simDt = 1/120) {
+        const breath = totalTime;
         const b = Math.sin(breath * 2.2);
         const w = Math.sin(breath * 1.4);
 
         this.nodes.root.position.copy(this.restPose.rootPos);
         this.nodes.body.position.set(0, b * 0.04, 0);
         this.nodes.chest.rotation.set(0, 0, b * 0.015);
-        this.nodes.head.rotation.set(-0.02 + b * 0.02, 0.08, 0);
+        this.nodes.head.rotation.set(this.restPose.headRot.x + b * 0.02, this.restPose.headRot.y, 0);
 
-        // Gentle cascading beard sway
-        this.nodes.beardSegments[0].rotation.set(-0.22, 0, w * 0.04);
-        this.nodes.beardSegments[1].rotation.set(-0.12, 0, Math.sin(breath * 1.4 - 0.4) * 0.07);
-        this.nodes.beardSegments[2].rotation.set(0.08, 0, Math.sin(breath * 1.4 - 0.8) * 0.11);
+        // Cascading gentle beard sway
+        this.nodes.beardSegments[0].rotation.set(this.restPose.beard0Rot.x, 0, w * 0.04);
+        this.nodes.beardSegments[1].rotation.set(this.restPose.beard1Rot.x, 0, Math.sin(breath * 1.4 - 0.4) * 0.07);
+        this.nodes.beardSegments[2].rotation.set(this.restPose.beard2Rot.x, 0, Math.sin(breath * 1.4 - 0.8) * 0.11);
 
-        // Hat joint rest alignment & tip flutter
+        // Hat rest alignment & tip flutter
         for (let i = 0; i < 5; i++) {
           const restTiltX = this.hatSpineJoints[i] ? this.hatSpineJoints[i].restTiltX : -0.15;
           const restTiltZ = this.hatSpineJoints[i] ? this.hatSpineJoints[i].restTiltZ : 0.05;
@@ -1900,153 +2079,356 @@
           }
         }
 
-        // Right arm & staff held upright, clear of face
+        // Rest transforms for arms and staff
         this.nodes.rightArm.rotation.copy(this.restPose.rightArmRot);
         this.nodes.rightForearm.rotation.copy(this.restPose.rightForearmRot);
         this.nodes.staffGroup.rotation.copy(this.restPose.staffGroupRot);
 
-        // Somatic left arm relaxed at side
         this.nodes.leftArm.rotation.copy(this.restPose.leftArmRot);
         this.nodes.leftForearm.rotation.copy(this.restPose.leftForearmRot);
 
-        // Staff Gem Ambient Glow (Restrained)
+        // Staff Gem Rest Ambient Glow
         const gemPulse = 1.6 + 0.4 * Math.sin(breath * 2.8);
         this.nodes.gemMesh.material.emissiveIntensity = gemPulse;
         this.nodes.gemLight.intensity = gemPulse * 1.0;
-        this.nodes.orbitalRing1.rotation.z += 0.015;
-        this.nodes.orbitalRing2.rotation.x += 0.02;
+        this.nodes.orbitalRing1.rotation.z += 1.0 * simDt;
+        this.nodes.orbitalRing2.rotation.x += 1.2 * simDt;
 
-        this.nodes.robeMesh.rotation.y = Math.sin(breath * 0.8) * 0.03;
-
-        this.updateHatMesh();
-      }
-
-      setPoseCharge(progress, totalTime) {
-        const ease = Math.min(1.0, Math.max(0.0, progress));
-        const smooth = ease * ease * (3.0 - 2.0 * ease);
-
-        this.nodes.root.position.set(-4.5 - smooth * 0.38, 0, 0);
-        this.nodes.body.position.set(0, smooth * 0.12, 0);
-        this.nodes.chest.rotation.set(-0.25 * smooth, 0, 0); // Arched back
-        this.nodes.head.rotation.set(-0.38 * smooth, 0.08 * (1.0 - smooth), 0);  // Look up toward gem
-
-        // Right arm raises staff high overhead, clear of face
-        this.nodes.rightArm.rotation.set(
-          0.32 + smooth * 2.05,
-          -0.20 + smooth * 0.25,
-          0.40 - smooth * 0.25
-        );
-        this.nodes.rightForearm.rotation.set(
-          0.55 - smooth * 0.30,
-          0,
-          0
-        );
-        this.nodes.staffGroup.rotation.set(
-          -0.25 - smooth * 1.15,
-          0,
-          -0.20 * (1.0 - smooth)
-        );
-
-        // Left arm gathers and weaves energy threads in front
-        this.nodes.leftArm.rotation.set(
-          -0.15 + smooth * 0.95,
-          -0.30 * smooth,
-          -0.32 - smooth * 0.10
-        );
-        this.nodes.leftForearm.rotation.set(
-          0.38 + smooth * 0.52,
-          0,
-          0.12 + smooth * 0.18
-        );
-
-        // Beard lifted forward & upward by gathering magical draft
-        const vortexFlutter = Math.sin(totalTime * 18.0) * (0.05 + smooth * 0.12);
-        this.nodes.beardSegments[0].rotation.set(-0.22 - 0.12 * smooth, 0, 0);
-        this.nodes.beardSegments[1].rotation.set(-0.12 - 0.20 * smooth + vortexFlutter, 0, 0);
-        this.nodes.beardSegments[2].rotation.set(0.08 - 0.28 * smooth + vortexFlutter * 1.4, 0, 0);
-
-        // Hat curves back with gathering magical tension
-        for (let i = 0; i < 5; i++) {
-          const restTiltX = this.hatSpineJoints[i].restTiltX;
-          const restTiltZ = this.hatSpineJoints[i].restTiltZ;
-          const curveBack = i >= 2 ? (i - 1) * 0.08 * smooth : 0;
-          this.nodes.hatSegments[i].rotation.set(restTiltX - curveBack, 0, restTiltZ);
+        if (this.nodes.robeMesh) {
+          this.nodes.robeMesh.rotation.y = Math.sin(breath * 0.8) * 0.03;
         }
 
-        // Blazing Energy Surge (Controlled HDR highlight)
-        const jitter = (rng.next() - 0.5) * 0.6 * smooth;
-        const gemPower = 1.8 + smooth * 7.5 + jitter;
-        this.nodes.gemMesh.material.emissiveIntensity = gemPower;
-        this.nodes.gemLight.intensity = gemPower * 1.2;
-        this.nodes.orbitalRing1.rotation.z += 0.04 + smooth * 0.15;
-        this.nodes.orbitalRing2.rotation.x += 0.05 + smooth * 0.18;
-
         this.updateHatMesh();
       }
 
-      setPoseCast(progress, totalTime) {
-        const t = Math.min(1.0, Math.max(0.0, progress));
+      setPoseCharge(progress, totalTime, simDt = 1/120, chargeEnergy = 0, recoverySnapshot = null) {
+        const p = Math.min(1.0, Math.max(0.0, progress));
 
-        if (t < 0.15) {
-          const snapT = t / 0.15;
-          const thrust = Math.sin(snapT * Math.PI * 0.5);
+        if (p < 0.30) {
+          // CHARGE 0–30%: Slight body compression, grounded weight, off-hand begins gathering, focus established
+          const p0 = p / 0.30;
+          const smooth = p0 * p0 * (3.0 - 2.0 * p0);
 
-          this.nodes.root.position.set(-4.9 + thrust * 1.5, 0, 0);
-          this.nodes.body.position.set(0, -0.12 * thrust, 0);
-          this.nodes.chest.rotation.set(-0.25 + thrust * 0.57, 0, 0);
-          this.nodes.head.rotation.set(-0.38 + thrust * 0.53, 0.08 * thrust, 0);
+          const targetRootX = -4.5;
+          const targetBodyY = -0.05;
+          const targetChestX = -0.06;
+          const targetHeadX = this.restPose.headRot.x - 0.08;
+          const targetHeadY = this.restPose.headRot.y;
+
+          const targetLeftArmX = this.restPose.leftArmRot.x + 0.20;
+          const targetLeftArmY = this.restPose.leftArmRot.y - 0.10;
+          const targetLeftArmZ = this.restPose.leftArmRot.z + 0.12;
+          const targetLeftForearmX = this.restPose.leftForearmRot.x + 0.10;
+
+          const targetRightArmX = this.restPose.rightArmRot.x + 0.30;
+          const targetStaffGroupX = this.restPose.staffGroupRot.x - 0.25;
+          const targetStaffGroupZ = this.restPose.staffGroupRot.z - 0.10;
+
+          if (recoverySnapshot) {
+            // Retriggered during RECOVER: smoothly blend from recovery pose into 30% charge pose
+            this.nodes.root.position.x = recoverySnapshot.rootPos.x + (targetRootX - recoverySnapshot.rootPos.x) * smooth;
+            this.nodes.root.position.y = 0;
+            this.nodes.root.position.z = 0;
+            this.nodes.body.position.set(0, recoverySnapshot.bodyPos.y + (targetBodyY - recoverySnapshot.bodyPos.y) * smooth, 0);
+
+            this.nodes.chest.rotation.set(
+              recoverySnapshot.chestRot.x + (targetChestX - recoverySnapshot.chestRot.x) * smooth,
+              recoverySnapshot.chestRot.y * (1.0 - smooth),
+              0
+            );
+            this.nodes.head.rotation.set(
+              recoverySnapshot.headRot.x + (targetHeadX - recoverySnapshot.headRot.x) * smooth,
+              recoverySnapshot.headRot.y + (targetHeadY - recoverySnapshot.headRot.y) * smooth,
+              0
+            );
+            this.nodes.leftArm.rotation.set(
+              recoverySnapshot.leftArmRot.x + (targetLeftArmX - recoverySnapshot.leftArmRot.x) * smooth,
+              recoverySnapshot.leftArmRot.y + (targetLeftArmY - recoverySnapshot.leftArmRot.y) * smooth,
+              recoverySnapshot.leftArmRot.z + (targetLeftArmZ - recoverySnapshot.leftArmRot.z) * smooth
+            );
+            this.nodes.leftForearm.rotation.set(
+              recoverySnapshot.leftForearmRot.x + (targetLeftForearmX - recoverySnapshot.leftForearmRot.x) * smooth,
+              0,
+              recoverySnapshot.leftForearmRot.z + (0.12 - recoverySnapshot.leftForearmRot.z) * smooth
+            );
+            this.nodes.rightArm.rotation.set(
+              recoverySnapshot.rightArmRot.x + (targetRightArmX - recoverySnapshot.rightArmRot.x) * smooth,
+              recoverySnapshot.rightArmRot.y,
+              recoverySnapshot.rightArmRot.z
+            );
+            this.nodes.rightForearm.rotation.set(
+              recoverySnapshot.rightForearmRot.x + (this.restPose.rightForearmRot.x - recoverySnapshot.rightForearmRot.x) * smooth,
+              0, 0
+            );
+            this.nodes.staffGroup.rotation.set(
+              recoverySnapshot.staffGroupRot.x + (targetStaffGroupX - recoverySnapshot.staffGroupRot.x) * smooth,
+              0,
+              recoverySnapshot.staffGroupRot.z + (targetStaffGroupZ - recoverySnapshot.staffGroupRot.z) * smooth
+            );
+
+            this.nodes.beardSegments[0].rotation.set(this.restPose.beard0Rot.x, 0, 0);
+            this.nodes.beardSegments[1].rotation.set(this.restPose.beard1Rot.x, 0, 0);
+            this.nodes.beardSegments[2].rotation.set(this.restPose.beard2Rot.x, 0, 0);
+
+            for (let i = 0; i < 5; i++) {
+              const restTiltX = this.hatSpineJoints[i].restTiltX;
+              const restTiltZ = this.hatSpineJoints[i].restTiltZ;
+              this.nodes.hatSegments[i].rotation.set(restTiltX, 0, restTiltZ);
+            }
+          } else {
+            // Normal charge from rest pose
+            this.nodes.root.position.copy(this.restPose.rootPos);
+            this.nodes.body.position.set(0, -0.05 * p0, 0);
+            this.nodes.chest.rotation.set(-0.06 * p0, 0, 0);
+            this.nodes.head.rotation.set(this.restPose.headRot.x - 0.08 * p0, this.restPose.headRot.y, 0);
+
+            this.nodes.leftArm.rotation.set(
+              this.restPose.leftArmRot.x + 0.20 * p0,
+              this.restPose.leftArmRot.y - 0.10 * p0,
+              this.restPose.leftArmRot.z + 0.12 * p0
+            );
+            this.nodes.leftForearm.rotation.set(this.restPose.leftForearmRot.x + 0.10 * p0, 0, 0.12);
+
+            this.nodes.rightArm.rotation.set(
+              this.restPose.rightArmRot.x + 0.30 * p0,
+              this.restPose.rightArmRot.y,
+              this.restPose.rightArmRot.z
+            );
+            this.nodes.rightForearm.rotation.copy(this.restPose.rightForearmRot);
+            this.nodes.staffGroup.rotation.set(
+              this.restPose.staffGroupRot.x - 0.25 * p0,
+              0,
+              this.restPose.staffGroupRot.z - 0.10 * p0
+            );
+
+            this.nodes.beardSegments[0].rotation.set(this.restPose.beard0Rot.x, 0, 0);
+            this.nodes.beardSegments[1].rotation.set(this.restPose.beard1Rot.x, 0, 0);
+            this.nodes.beardSegments[2].rotation.set(this.restPose.beard2Rot.x, 0, 0);
+
+            for (let i = 0; i < 5; i++) {
+              const restTiltX = this.hatSpineJoints[i].restTiltX;
+              const restTiltZ = this.hatSpineJoints[i].restTiltZ;
+              this.nodes.hatSegments[i].rotation.set(restTiltX, 0, restTiltZ);
+            }
+          }
+
+          const gemPwr = 1.8 + p0 * 1.4;
+          this.nodes.gemMesh.material.emissiveIntensity = gemPwr;
+          this.nodes.gemLight.intensity = gemPwr * 1.1;
+          this.nodes.orbitalRing1.rotation.z += 1.8 * simDt;
+          this.nodes.orbitalRing2.rotation.x += 2.0 * simDt;
+
+        } else if (p < 0.80) {
+          // CHARGE 30–80%: Torso & staff lift and twist, head follows focus, beard & hat lag, tension increases
+          const p1 = (p - 0.30) / 0.50;
+          const smooth = p1 * p1 * (3.0 - 2.0 * p1);
+
+          this.nodes.root.position.set(-4.5 - smooth * 0.38, 0, 0);
+          this.nodes.body.position.set(0, -0.05 * (1.0 - smooth) + smooth * 0.12, 0);
+          this.nodes.chest.rotation.set(-0.06 - smooth * 0.22, smooth * 0.04, 0);
+          this.nodes.head.rotation.set(-0.10 - smooth * 0.28, 0.10 * (1.0 - smooth), 0);
 
           this.nodes.rightArm.rotation.set(
-            2.37 - thrust * 1.02,
-            0.05 - thrust * 0.20,
-            0.15 - thrust * 0.10
+            0.40 + smooth * 1.97,
+            -0.15 + smooth * 0.20,
+            0.10 - smooth * 0.20
           );
-          this.nodes.rightForearm.rotation.set(
-            0.25 - thrust * 0.20,
-            0,
-            0
-          );
+          this.nodes.rightForearm.rotation.set(0.30 - smooth * 0.05, 0, 0);
           this.nodes.staffGroup.rotation.set(
-            -1.40 + thrust * 1.25,
+            -0.45 - smooth * 0.95,
             0,
-            0
+            0.15 - smooth * 0.35
           );
 
           this.nodes.leftArm.rotation.set(
-            -0.15 - 0.60 * thrust,
-            0,
-            -0.32 - 0.15 * thrust
+            0.05 + smooth * 0.75,
+            -0.05 - smooth * 0.25,
+            -0.20 - smooth * 0.12
           );
           this.nodes.leftForearm.rotation.set(
-            0.38 - 0.08 * thrust,
+            0.48 + smooth * 0.42,
             0,
-            0.10
+            0.12 + smooth * 0.18
           );
 
-          // Beard trails back along the violent forward strike
-          this.nodes.beardSegments[0].rotation.set(-0.22 + 0.35 * thrust, 0, 0);
-          this.nodes.beardSegments[1].rotation.set(-0.12 + 0.55 * thrust, 0, 0);
-          this.nodes.beardSegments[2].rotation.set(0.08 + 0.75 * thrust, 0, 0);
+          // Secondary lag: beard and hat lag behind primary body motion
+          const flutter = Math.sin(totalTime * 16.0) * (0.05 + smooth * 0.12);
+          this.nodes.beardSegments[0].rotation.set(-0.22 - 0.12 * smooth, 0, 0);
+          this.nodes.beardSegments[1].rotation.set(-0.12 - 0.20 * smooth + flutter, 0, 0);
+          this.nodes.beardSegments[2].rotation.set(0.08 - 0.28 * smooth + flutter * 1.4, 0, 0);
 
-          // Hat whips back on release gesture
           for (let i = 0; i < 5; i++) {
             const restTiltX = this.hatSpineJoints[i].restTiltX;
             const restTiltZ = this.hatSpineJoints[i].restTiltZ;
-            const whip = i >= 2 ? (i - 1) * 0.10 * thrust : 0;
-            this.nodes.hatSegments[i].rotation.set(restTiltX - whip, 0, restTiltZ);
+            const curveBack = i >= 2 ? (i - 1) * 0.08 * smooth : 0;
+            this.nodes.hatSegments[i].rotation.set(restTiltX - curveBack, 0, restTiltZ);
           }
 
-          // Explosive Flash Peak
-          this.nodes.gemMesh.material.emissiveIntensity = 18.0;
-          this.nodes.gemLight.intensity = 22.0;
-        } else {
-          const ft = (t - 0.15) / 0.85;
-          const ripple = Math.sin(totalTime * 14.0) * Math.exp(-ft * 3.5) * 0.15;
+          const gemPwr = 3.2 + smooth * 4.8;
+          this.nodes.gemMesh.material.emissiveIntensity = gemPwr;
+          this.nodes.gemLight.intensity = gemPwr * 1.2;
+          this.nodes.orbitalRing1.rotation.z += (2.2 + smooth * 3.5) * simDt;
+          this.nodes.orbitalRing2.rotation.x += (2.5 + smooth * 4.0) * simDt;
 
-          this.nodes.root.position.set(-3.4 - ft * 0.2, 0, 0);
-          this.nodes.body.position.set(0, -0.12 * (1.0 - ft * 0.2), 0);
-          this.nodes.chest.rotation.set(0.32 - ft * 0.12, 0, 0);
-          this.nodes.head.rotation.set(0.15 - ft * 0.08, 0.08, 0);
+        } else {
+          // CHARGE 80–100%: Near-held anticipation pose! Large motion slows, energy compresses, tension visibly peaks
+          const p2 = (p - 0.80) / 0.20;
+          const holdT = Math.sin(p2 * Math.PI * 0.5);
+
+          this.nodes.root.position.set(-4.88 - 0.04 * holdT, 0, 0);
+          this.nodes.body.position.set(0, 0.12 + 0.02 * holdT, 0);
+          this.nodes.chest.rotation.set(-0.28 - 0.02 * holdT, 0.04, 0);
+          this.nodes.head.rotation.set(-0.38 - 0.02 * holdT, 0, 0);
+
+          this.nodes.rightArm.rotation.set(2.37 + 0.03 * holdT, 0.05, -0.10);
+          this.nodes.rightForearm.rotation.set(0.25, 0, 0);
+          this.nodes.staffGroup.rotation.set(-1.40, 0, -0.20);
+
+          this.nodes.leftArm.rotation.set(0.80 + 0.05 * holdT, -0.30, -0.32);
+          this.nodes.leftForearm.rotation.set(0.90, 0, 0.30);
+
+          // Subtle deterministic tension tremor
+          const tremor = Math.sin(totalTime * 28.0) * 0.02 * p2;
+          this.nodes.beardSegments[0].rotation.set(-0.34, 0, 0);
+          this.nodes.beardSegments[1].rotation.set(-0.32 + tremor, 0, 0);
+          this.nodes.beardSegments[2].rotation.set(-0.20 + tremor * 1.5, 0, 0);
+
+          for (let i = 0; i < 5; i++) {
+            const restTiltX = this.hatSpineJoints[i].restTiltX;
+            const restTiltZ = this.hatSpineJoints[i].restTiltZ;
+            const curveBack = i >= 2 ? (i - 1) * 0.08 + (i >= 3 ? tremor : 0) : 0;
+            this.nodes.hatSegments[i].rotation.set(restTiltX - curveBack, 0, restTiltZ);
+          }
+
+          const gemPwr = 8.0 + p2 * 1.5;
+          this.nodes.gemMesh.material.emissiveIntensity = gemPwr;
+          this.nodes.gemLight.intensity = gemPwr * 1.25;
+          this.nodes.orbitalRing1.rotation.z += (5.7 + p2 * 4.0) * simDt;
+          this.nodes.orbitalRing2.rotation.x += (6.5 + p2 * 4.5) * simDt;
+        }
+
+        if (this.nodes.robeMesh) {
+          this.nodes.robeMesh.rotation.y = 0.04 * p;
+        }
+        this.updateHatMesh();
+      }
+
+      setPoseCast(progress, totalTime, simDt = 1/120, blendSnapshot = null) {
+        const t = Math.min(1.0, Math.max(0.0, progress));
+
+        if (t < 0.15) {
+          // CAST 0–15%: Accelerate through forward strike! Release occurs at exactly 15% (0.195s)
+          const snapT = t / 0.15;
+          const thrust = Math.sin(snapT * Math.PI * 0.5);
+
+          // Target Strike Apex transforms
+          const targetRootX = -3.4;
+          const targetBodyY = -0.12;
+          const targetChest = { x: 0.32, y: 0, z: 0 };
+          const targetHead = { x: 0.15, y: 0.08, z: 0 };
+          const targetRightArm = { x: 1.35, y: -0.15, z: 0.05 };
+          const targetRightForearm = { x: 0.05, y: 0, z: 0 };
+          const targetStaffGroup = { x: -0.15, y: 0, z: 0 };
+          const targetLeftArm = { x: -0.75, y: 0, z: -0.42 };
+          const targetLeftForearm = { x: 0.30, y: 0, z: 0.10 };
+
+          if (blendSnapshot) {
+            // Early manual release: smoothly blend from actual current pose to strike apex
+            this.nodes.root.position.x = blendSnapshot.rootPos.x + (targetRootX - blendSnapshot.rootPos.x) * thrust;
+            this.nodes.root.position.y = 0;
+            this.nodes.root.position.z = 0;
+            this.nodes.body.position.set(0, blendSnapshot.bodyPos.y + (targetBodyY - blendSnapshot.bodyPos.y) * thrust, 0);
+
+            this.nodes.chest.rotation.set(
+              blendSnapshot.chestRot.x + (targetChest.x - blendSnapshot.chestRot.x) * thrust,
+              blendSnapshot.chestRot.y + (targetChest.y - blendSnapshot.chestRot.y) * thrust,
+              0
+            );
+            this.nodes.head.rotation.set(
+              blendSnapshot.headRot.x + (targetHead.x - blendSnapshot.headRot.x) * thrust,
+              blendSnapshot.headRot.y + (targetHead.y - blendSnapshot.headRot.y) * thrust,
+              0
+            );
+            this.nodes.rightArm.rotation.set(
+              blendSnapshot.rightArmRot.x + (targetRightArm.x - blendSnapshot.rightArmRot.x) * thrust,
+              blendSnapshot.rightArmRot.y + (targetRightArm.y - blendSnapshot.rightArmRot.y) * thrust,
+              blendSnapshot.rightArmRot.z + (targetRightArm.z - blendSnapshot.rightArmRot.z) * thrust
+            );
+            this.nodes.rightForearm.rotation.set(
+              blendSnapshot.rightForearmRot.x + (targetRightForearm.x - blendSnapshot.rightForearmRot.x) * thrust,
+              0, 0
+            );
+            this.nodes.staffGroup.rotation.set(
+              blendSnapshot.staffGroupRot.x + (targetStaffGroup.x - blendSnapshot.staffGroupRot.x) * thrust,
+              0,
+              blendSnapshot.staffGroupRot.z * (1.0 - thrust)
+            );
+            this.nodes.leftArm.rotation.set(
+              blendSnapshot.leftArmRot.x + (targetLeftArm.x - blendSnapshot.leftArmRot.x) * thrust,
+              0,
+              blendSnapshot.leftArmRot.z + (targetLeftArm.z - blendSnapshot.leftArmRot.z) * thrust
+            );
+            this.nodes.leftForearm.rotation.set(
+              blendSnapshot.leftForearmRot.x + (targetLeftForearm.x - blendSnapshot.leftForearmRot.x) * thrust,
+              0,
+              blendSnapshot.leftForearmRot.z + (targetLeftForearm.z - blendSnapshot.leftForearmRot.z) * thrust
+            );
+
+            this.nodes.beardSegments[0].rotation.set(blendSnapshot.beard0Rot.x + (0.13 - blendSnapshot.beard0Rot.x) * thrust, 0, 0);
+            this.nodes.beardSegments[1].rotation.set(blendSnapshot.beard1Rot.x + (0.43 - blendSnapshot.beard1Rot.x) * thrust, 0, 0);
+            this.nodes.beardSegments[2].rotation.set(blendSnapshot.beard2Rot.x + (0.83 - blendSnapshot.beard2Rot.x) * thrust, 0, 0);
+
+            for (let i = 0; i < 5; i++) {
+              const startX = blendSnapshot.hatRots[i] ? blendSnapshot.hatRots[i].x : this.hatSpineJoints[i].restTiltX;
+              const restZ = this.hatSpineJoints[i].restTiltZ;
+              const whip = i >= 2 ? (i - 1) * 0.10 * thrust : 0;
+              this.nodes.hatSegments[i].rotation.set(startX - whip, 0, restZ);
+            }
+          } else {
+            // Standard transition from full anticipation charge pose to strike apex
+            this.nodes.root.position.set(-4.9 + thrust * 1.5, 0, 0);
+            this.nodes.body.position.set(0, 0.12 - thrust * 0.24, 0);
+            this.nodes.chest.rotation.set(-0.28 + thrust * 0.60, 0.04 * (1.0 - thrust), 0);
+            this.nodes.head.rotation.set(-0.38 + thrust * 0.53, 0.08 * thrust, 0);
+
+            this.nodes.rightArm.rotation.set(
+              2.37 - thrust * 1.02,
+              0.05 - thrust * 0.20,
+              -0.10 + thrust * 0.15
+            );
+            this.nodes.rightForearm.rotation.set(0.25 - thrust * 0.20, 0, 0);
+            this.nodes.staffGroup.rotation.set(-1.40 + thrust * 1.25, 0, -0.20 * (1.0 - thrust));
+
+            this.nodes.leftArm.rotation.set(0.80 - thrust * 1.55, -0.30 * (1.0 - thrust), -0.32 - thrust * 0.10);
+            this.nodes.leftForearm.rotation.set(0.90 - thrust * 0.60, 0, 0.30 - thrust * 0.20);
+
+            // Beard whips along forward strike
+            this.nodes.beardSegments[0].rotation.set(-0.34 + 0.47 * thrust, 0, 0);
+            this.nodes.beardSegments[1].rotation.set(-0.32 + 0.75 * thrust, 0, 0);
+            this.nodes.beardSegments[2].rotation.set(-0.20 + 1.03 * thrust, 0, 0);
+
+            for (let i = 0; i < 5; i++) {
+              const restTiltX = this.hatSpineJoints[i].restTiltX;
+              const restTiltZ = this.hatSpineJoints[i].restTiltZ;
+              const whip = i >= 2 ? (i - 1) * 0.10 * thrust : 0;
+              this.nodes.hatSegments[i].rotation.set(restTiltX - whip, 0, restTiltZ);
+            }
+          }
+
+          // Explosive Flash Peak at release
+          const gemPwr = 9.5 + thrust * 8.5; // up to 18.0 at release
+          this.nodes.gemMesh.material.emissiveIntensity = gemPwr;
+          this.nodes.gemLight.intensity = gemPwr * 1.2;
+
+        } else if (t < 0.35) {
+          // CAST 15–35%: Follow-through & character recoil begins, light falls rapidly, projectile travels
+          const ft = (t - 0.15) / 0.20;
+          const recoil = Math.sin(ft * Math.PI * 0.5);
+
+          this.nodes.root.position.set(-3.4 - recoil * 0.2, 0, 0);
+          this.nodes.body.position.set(0, -0.12 + recoil * 0.04, 0);
+          this.nodes.chest.rotation.set(0.32 - recoil * 0.08, 0, 0);
+          this.nodes.head.rotation.set(0.15 - recoil * 0.05, 0.08, 0);
 
           this.nodes.rightArm.rotation.set(1.35, -0.15, 0.05);
           this.nodes.rightForearm.rotation.set(0.05, 0, 0);
@@ -2055,86 +2437,206 @@
           this.nodes.leftArm.rotation.set(-0.75, 0, -0.42);
           this.nodes.leftForearm.rotation.set(0.30, 0, 0.10);
 
-          // Beard relaxes after forward strike
-          this.nodes.beardSegments[0].rotation.set(-0.22 + 0.35 * (1.0 - ft * 0.7), 0, 0);
-          this.nodes.beardSegments[1].rotation.set(-0.12 + 0.55 * (1.0 - ft * 0.7) + ripple, 0, 0);
-          this.nodes.beardSegments[2].rotation.set(0.08 + 0.75 * (1.0 - ft * 0.7) + ripple * 1.4, 0, 0);
+          this.nodes.beardSegments[0].rotation.set(0.13 - 0.15 * ft, 0, 0);
+          this.nodes.beardSegments[1].rotation.set(0.43 - 0.25 * ft, 0, 0);
+          this.nodes.beardSegments[2].rotation.set(0.83 - 0.40 * ft, 0, 0);
 
           for (let i = 0; i < 5; i++) {
             const restTiltX = this.hatSpineJoints[i].restTiltX;
             const restTiltZ = this.hatSpineJoints[i].restTiltZ;
-            const whip = i >= 2 ? (i - 1) * 0.10 * (1.0 - ft * 0.8) : 0;
+            const whip = i >= 2 ? (i - 1) * 0.10 * (1.0 - ft * 0.4) : 0;
             this.nodes.hatSegments[i].rotation.set(restTiltX - whip, 0, restTiltZ);
           }
 
-          this.nodes.gemMesh.material.emissiveIntensity = Math.max(1.8, 12.0 * (1.0 - ft));
-          this.nodes.gemLight.intensity = Math.max(2.0, 14.0 * (1.0 - ft));
+          // Light falls from peak
+          const gemPwr = 18.0 * (1.0 - ft) + 4.5 * ft;
+          this.nodes.gemMesh.material.emissiveIntensity = gemPwr;
+          this.nodes.gemLight.intensity = gemPwr * 1.1;
+
+        } else {
+          // CAST 35–100%: Character relaxes from strike, projectile / impact aftermath continues independently
+          const relaxT = (t - 0.35) / 0.65;
+          const recoilDecay = Math.exp(-relaxT * 3.0);
+
+          this.nodes.root.position.set(-3.6, 0, 0);
+          this.nodes.body.position.set(0, -0.08 * (1.0 - relaxT * 0.5), 0);
+          this.nodes.chest.rotation.set(0.24 * (1.0 - relaxT * 0.3), 0, 0);
+          this.nodes.head.rotation.set(0.10 * (1.0 - relaxT * 0.3), 0.08, 0);
+
+          this.nodes.rightArm.rotation.set(1.35, -0.15, 0.05);
+          this.nodes.rightForearm.rotation.set(0.05, 0, 0);
+          this.nodes.staffGroup.rotation.set(-0.15, 0, 0);
+
+          this.nodes.leftArm.rotation.set(-0.75, 0, -0.42);
+          this.nodes.leftForearm.rotation.set(0.30, 0, 0.10);
+
+          const ripple = Math.sin(totalTime * 12.0) * recoilDecay * 0.12;
+          this.nodes.beardSegments[0].rotation.set(-0.02 - 0.20 * (1.0 - recoilDecay), 0, 0);
+          this.nodes.beardSegments[1].rotation.set(0.18 - 0.30 * (1.0 - recoilDecay) + ripple, 0, 0);
+          this.nodes.beardSegments[2].rotation.set(0.43 - 0.35 * (1.0 - recoilDecay) + ripple * 1.4, 0, 0);
+
+          for (let i = 0; i < 5; i++) {
+            const restTiltX = this.hatSpineJoints[i].restTiltX;
+            const restTiltZ = this.hatSpineJoints[i].restTiltZ;
+            const whip = i >= 2 ? (i - 1) * 0.06 * recoilDecay : 0;
+            this.nodes.hatSegments[i].rotation.set(restTiltX - whip, 0, restTiltZ);
+          }
+
+          const gemPwr = Math.max(1.8, 4.5 * (1.0 - relaxT) + 1.8 * relaxT);
+          this.nodes.gemMesh.material.emissiveIntensity = gemPwr;
+          this.nodes.gemLight.intensity = gemPwr * 1.0;
         }
 
-        this.nodes.orbitalRing1.rotation.z += 0.03;
-        this.nodes.orbitalRing2.rotation.x += 0.04;
+        this.nodes.orbitalRing1.rotation.z += 1.8 * simDt;
+        this.nodes.orbitalRing2.rotation.x += 2.2 * simDt;
 
+        if (this.nodes.robeMesh) {
+          this.nodes.robeMesh.rotation.y = 0.02;
+        }
         this.updateHatMesh();
       }
 
-      setPoseRecover(progress, totalTime) {
-        const ease = Math.min(1.0, Math.max(0.0, progress));
-        const smooth = ease * ease * (3.0 - 2.0 * ease);
-        const inv = 1.0 - smooth;
+      setPoseRecover(progress, totalTime, simDt = 1/120) {
+        const p = Math.min(1.0, Math.max(0.0, progress));
 
-        this.nodes.root.position.set(-3.6 * inv - 4.5 * smooth, 0, 0);
-        this.nodes.body.position.set(0, -0.12 * inv, 0); // Smoothly restores body Y to 0!
-        this.nodes.chest.rotation.set(0.20 * inv, 0, 0);
-        this.nodes.head.rotation.set(0.07 * inv - 0.02 * smooth, 0.08, 0);
+        if (p < 0.60) {
+          // RECOVER 0–60%: Torso, staff, arms move steadily back toward rest
+          const u = p / 0.60;
+          const smoothU = u * u * (3.0 - 2.0 * u);
 
-        // Hat smoothly returns from cast/recoil to rest tilt (complete transform restoration)
-        for (let i = 0; i < 5; i++) {
-          const restTiltX = this.hatSpineJoints[i].restTiltX;
-          const restTiltZ = this.hatSpineJoints[i].restTiltZ;
-          const residualWhip = i >= 2 ? (i - 1) * 0.05 * inv : 0;
-          this.nodes.hatSegments[i].rotation.set(restTiltX - residualWhip, 0, restTiltZ);
+          this.nodes.root.position.set(-3.6 * (1.0 - smoothU) + this.restPose.rootPos.x * smoothU, 0, 0);
+          this.nodes.body.position.set(0, -0.04 * (1.0 - smoothU) + this.restPose.bodyPos.y * smoothU, 0);
+          this.nodes.chest.rotation.set(0.168 * (1.0 - smoothU) + this.restPose.chestRot.x * smoothU, 0, 0);
+          this.nodes.head.rotation.set(
+            0.07 * (1.0 - smoothU) + this.restPose.headRot.x * smoothU,
+            0.08 * (1.0 - smoothU) + this.restPose.headRot.y * smoothU,
+            0
+          );
+
+          this.nodes.rightArm.rotation.set(
+            1.35 * (1.0 - smoothU) + this.restPose.rightArmRot.x * smoothU,
+            -0.15 * (1.0 - smoothU) + this.restPose.rightArmRot.y * smoothU,
+            0.05 * (1.0 - smoothU) + this.restPose.rightArmRot.z * smoothU
+          );
+          this.nodes.rightForearm.rotation.set(
+            0.05 * (1.0 - smoothU) + this.restPose.rightForearmRot.x * smoothU,
+            0, 0
+          );
+          this.nodes.staffGroup.rotation.set(
+            -0.15 * (1.0 - smoothU) + this.restPose.staffGroupRot.x * smoothU,
+            0,
+            this.restPose.staffGroupRot.z * smoothU
+          );
+
+          this.nodes.leftArm.rotation.set(
+            -0.75 * (1.0 - smoothU) + this.restPose.leftArmRot.x * smoothU,
+            0.0 * (1.0 - smoothU) + this.restPose.leftArmRot.y * smoothU,
+            -0.42 * (1.0 - smoothU) + this.restPose.leftArmRot.z * smoothU
+          );
+          this.nodes.leftForearm.rotation.set(
+            0.30 * (1.0 - smoothU) + this.restPose.leftForearmRot.x * smoothU,
+            0,
+            0.10 * (1.0 - smoothU) + this.restPose.leftForearmRot.z * smoothU
+          );
+
+          this.nodes.beardSegments[0].rotation.set(this.restPose.beard0Rot.x, 0, 0);
+          this.nodes.beardSegments[1].rotation.set(this.restPose.beard1Rot.x + 0.15 * (1.0 - smoothU), 0, 0);
+          this.nodes.beardSegments[2].rotation.set(this.restPose.beard2Rot.x + 0.25 * (1.0 - smoothU), 0, 0);
+
+          for (let i = 0; i < 5; i++) {
+            const restTiltX = this.hatSpineJoints[i].restTiltX;
+            const restTiltZ = this.hatSpineJoints[i].restTiltZ;
+            const resWhip = i >= 2 ? (i - 1) * 0.03 * (1.0 - smoothU) : 0;
+            this.nodes.hatSegments[i].rotation.set(restTiltX - resWhip, 0, restTiltZ);
+          }
+
+        } else {
+          // RECOVER 60–100%: Beard, hat tip, and secondary motion finish settling into exact rest
+          const v = (p - 0.60) / 0.40;
+          const smoothV = v * v * (3.0 - 2.0 * v);
+          const settleDecay = 1.0 - smoothV;
+          const settle = Math.sin(v * Math.PI * 3.0) * 0.06 * settleDecay;
+
+          // Body & limbs strictly at rest
+          this.nodes.root.position.copy(this.restPose.rootPos);
+          this.nodes.body.position.set(0, 0, 0);
+          this.nodes.chest.rotation.set(0, 0, 0);
+          this.nodes.head.rotation.copy(this.restPose.headRot);
+
+          this.nodes.rightArm.rotation.copy(this.restPose.rightArmRot);
+          this.nodes.rightForearm.rotation.copy(this.restPose.rightForearmRot);
+          this.nodes.staffGroup.rotation.copy(this.restPose.staffGroupRot);
+
+          this.nodes.leftArm.rotation.copy(this.restPose.leftArmRot);
+          this.nodes.leftForearm.rotation.copy(this.restPose.leftForearmRot);
+
+          // Subtle tip settling
+          this.nodes.beardSegments[0].rotation.set(this.restPose.beard0Rot.x, 0, 0);
+          this.nodes.beardSegments[1].rotation.set(this.restPose.beard1Rot.x + settle, 0, 0);
+          this.nodes.beardSegments[2].rotation.set(this.restPose.beard2Rot.x + settle * 1.4, 0, 0);
+
+          for (let i = 0; i < 5; i++) {
+            const restTiltX = this.hatSpineJoints[i].restTiltX;
+            const restTiltZ = this.hatSpineJoints[i].restTiltZ;
+            const tipSettle = i >= 3 ? Math.sin(v * Math.PI * 2.5) * 0.03 * settleDecay : 0;
+            this.nodes.hatSegments[i].rotation.set(restTiltX - tipSettle, 0, restTiltZ);
+          }
         }
 
-        this.nodes.rightArm.rotation.set(
-          1.35 * inv + 0.10 * smooth,
-          -0.15 * inv - 0.15 * smooth,
-          0.05 * inv + 0.10 * smooth
-        );
-        this.nodes.rightForearm.rotation.set(0.05 * inv + 0.30 * smooth, 0, 0);
-        this.nodes.staffGroup.rotation.set(-0.15 * inv - 0.20 * smooth, 0, 0.25 * smooth);
+        const gemPwr = 1.8 + Math.sin(totalTime * 2.0) * 0.2;
+        this.nodes.gemMesh.material.emissiveIntensity = gemPwr;
+        this.nodes.gemLight.intensity = gemPwr * 1.0;
+        this.nodes.orbitalRing1.rotation.z += 1.0 * simDt;
+        this.nodes.orbitalRing2.rotation.x += 1.2 * simDt;
 
-        this.nodes.leftArm.rotation.set(-0.75 * inv - 0.15 * smooth, 0, -0.42 * inv - 0.32 * smooth);
-        this.nodes.leftForearm.rotation.set(0.30 * inv + 0.38 * smooth, 0, 0.10 * inv + 0.12 * smooth);
-
-        const settle = Math.sin(smooth * Math.PI * 2) * 0.15 * inv;
-        this.nodes.beardSegments[0].rotation.set(-0.22 + 0.10 * inv, 0, 0);
-        this.nodes.beardSegments[1].rotation.set(-0.12 + 0.25 * inv + settle, 0, 0);
-        this.nodes.beardSegments[2].rotation.set(0.08 + 0.35 * inv + settle * 1.4, 0, 0);
-
-        this.nodes.gemMesh.material.emissiveIntensity = 2.0 * inv + 1.8 * smooth;
-        this.nodes.gemLight.intensity = 2.5 * inv + 1.8 * smooth;
-
+        if (this.nodes.robeMesh) {
+          this.nodes.robeMesh.rotation.y = 0;
+        }
         this.updateHatMesh();
       }
     }
 
-    // Narrow Character Adapter boundary for future Phase 4+ and GLB interoperability
+    // Narrow Character Adapter boundary for Phase 4+ and GLB interoperability
     class CharacterAdapter {
       constructor(character) {
         this.character = character;
       }
-      applyPose(state, progress, totalTime) {
-        if (state === 0) this.character.setPoseIdle(progress, totalTime);
-        else if (state === 1) this.character.setPoseCharge(progress, totalTime);
-        else if (state === 2) this.character.setPoseCast(progress, totalTime);
-        else if (state === 3) this.character.setPoseRecover(progress, totalTime);
+
+      applyPose(sample, simDt, blendSnapshot = null, recoverySnapshot = null) {
+        if (!sample) return;
+        const state = sample.state;
+        const progress = sample.progress;
+        const totalTime = sample.totalTime;
+        const chargeEnergy = sample.chargeEnergy;
+
+        if (state === 0) { // IDLE
+          this.character.setPoseIdle(progress, totalTime, simDt);
+        } else if (state === 1) { // CHARGE
+          this.character.setPoseCharge(progress, totalTime, simDt, chargeEnergy, recoverySnapshot);
+        } else if (state === 2) { // CAST
+          this.character.setPoseCast(progress, totalTime, simDt, blendSnapshot);
+        } else if (state === 3) { // RECOVER
+          this.character.setPoseRecover(progress, totalTime, simDt);
+        }
       }
+
+      capturePoseSnapshot() {
+        return this.character.capturePoseSnapshot();
+      }
+
+      resetToRest() {
+        this.character.resetToRest();
+      }
+
       getGemWorldPosition(outVec) {
         return this.character.getGemWorldPosition(outVec);
       }
-      getSpellDirection(outVec) {
-        return outVec.set(1, 0, 0).normalize();
+
+      getSpellDirection(outVec, targetPos) {
+        this.character.getGemWorldPosition(outVec);
+        return outVec.subVectors(targetPos, outVec).normalize();
       }
+
       getAttachment(name, outTransform) {
         if (name === 'gem' && this.character.nodes.gemMesh) {
           outTransform.copy(this.character.nodes.gemMesh.matrixWorld);
@@ -2143,10 +2645,12 @@
         }
         return outTransform;
       }
+
       getBounds(outBox) {
         outBox.setFromObject(this.character.group);
         return outBox;
       }
+
       dispose() {
         this.character.group.traverse((obj) => {
           if (obj.geometry) obj.geometry.dispose();
@@ -2165,6 +2669,7 @@
       constructor(scene) {
         this.scene = scene;
         this.runesMesh = null;
+        this.localRunesMesh = null;
         this.monolithRunes = [];
         this.monolithLight = null;
         this.targetMonolith = null;
@@ -2172,6 +2677,7 @@
         this.starsMesh = null;
         this.stoneTex = null;
         this.runeTex = null;
+        this.localRuneTex = null;
         this.moonTex = null;
 
         this.buildEnvironment();
@@ -2219,7 +2725,7 @@
         const matRunes = new THREE.MeshBasicMaterial({
           map: this.runeTex,
           transparent: true,
-          opacity: 0.22, // Subdued so floor does not overpower wizard
+          opacity: 0.22, // Subdued so broad floor does not overpower wizard
           blending: THREE.AdditiveBlending,
           depthWrite: false
         });
@@ -2228,6 +2734,21 @@
         this.runesMesh.rotation.x = -Math.PI / 2;
         this.runesMesh.position.set(0, 0.015, 0);
         this.scene.add(this.runesMesh);
+
+        // Localized masked rune floor response directly beneath wizard (Phase 5 requirement)
+        this.localRuneTex = Textures.createLocalRuneDisc();
+        const matLocalRunes = new THREE.MeshBasicMaterial({
+          map: this.localRuneTex,
+          transparent: true,
+          opacity: 0.0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        const localRuneGeo = new THREE.PlaneGeometry(6.4, 6.4);
+        this.localRunesMesh = new THREE.Mesh(localRuneGeo, matLocalRunes);
+        this.localRunesMesh.rotation.x = -Math.PI / 2;
+        this.localRunesMesh.position.set(-4.5, 0.02, 0.0);
+        this.scene.add(this.localRunesMesh);
 
         // --- 3. Weathered Ancient Ruin Columns ---
         const columnGeo = new THREE.CylinderGeometry(0.7, 0.8, 6.5, 8);
@@ -2415,15 +2936,28 @@
         }
       }
 
-      update(time, chargeIntensity) {
+      getStrikeTarget(outVec = new THREE.Vector3()) {
+        return outVec.set(10.2, 3.4, 0.0);
+      }
+
+      getStrikeNormal(outVec = new THREE.Vector3()) {
+        return outVec.set(-1.0, 0.0, 0.0);
+      }
+
+      update(time, floorRuneResponse, simDt = 1/120) {
         if (this.runesMesh) {
-          this.runesMesh.rotation.z = time * 0.05;
-          const baseAlpha = 0.20 + 0.05 * Math.sin(time * 2.0);
-          this.runesMesh.material.opacity = baseAlpha + chargeIntensity * 0.35;
+          this.runesMesh.rotation.z += 0.04 * simDt;
+          const baseAlpha = 0.18 + 0.04 * Math.sin(time * 2.0);
+          this.runesMesh.material.opacity = baseAlpha; // Broad dais remains quiet and subordinate
+        }
+
+        if (this.localRunesMesh) {
+          this.localRunesMesh.rotation.z -= 0.06 * simDt;
+          this.localRunesMesh.material.opacity = floorRuneResponse; // Localized gradient response near wizard
         }
 
         this.mistPlanes.forEach((plane, idx) => {
-          plane.rotation.z = time * (0.015 + idx * 0.01);
+          plane.rotation.z += (0.015 + idx * 0.01) * simDt;
         });
 
         if (this.starsMesh) {
@@ -2433,20 +2967,23 @@
 
       triggerImpactFlash() {
         if (this.monolithLight) {
-          this.monolithLight.intensity = 24.0;
+          this.monolithLight.intensity = 26.0;
+          this.monolithLight.position.set(9.8, 3.4, 0.0);
         }
         this.monolithRunes.forEach((r) => {
-          r.material.emissiveIntensity = 8.0;
+          r.material.emissiveIntensity = 8.5;
         });
       }
 
       decayImpactLight(dt) {
-        if (this.monolithLight && this.monolithLight.intensity > 0.01) {
-          this.monolithLight.intensity = THREE.MathUtils.lerp(this.monolithLight.intensity, 0, dt * 6.0);
+        const decay = Math.exp(-6.5 * dt);
+        if (this.monolithLight) {
+          this.monolithLight.intensity *= decay;
+          if (this.monolithLight.intensity < 0.01) this.monolithLight.intensity = 0.0;
         }
         this.monolithRunes.forEach((r) => {
           if (r.material.emissiveIntensity > 1.2) {
-            r.material.emissiveIntensity = THREE.MathUtils.lerp(r.material.emissiveIntensity, 1.2, dt * 5.0);
+            r.material.emissiveIntensity = 1.2 + (r.material.emissiveIntensity - 1.2) * decay;
           }
         });
       }
@@ -2454,12 +2991,17 @@
       dispose() {
         if (this.stoneTex) this.stoneTex.dispose();
         if (this.runeTex) this.runeTex.dispose();
+        if (this.localRuneTex) this.localRuneTex.dispose();
         if (this.moonTex) this.moonTex.dispose();
+        if (this.localRunesMesh) {
+          if (this.localRunesMesh.geometry) this.localRunesMesh.geometry.dispose();
+          if (this.localRunesMesh.material) this.localRunesMesh.material.dispose();
+        }
       }
     }
 
     // =========================================================================
-    // 5. MAGIC & PARTICLE SYSTEM (Phase 0 Defect Repairs & Bounds Safety)
+    // 5. MAGIC & PARTICLE SYSTEM (Phase 5 Charge VFX & Phase 6 Hero VFX)
     // =========================================================================
     const _scratchVec1 = new THREE.Vector3();
     const _scratchVec2 = new THREE.Vector3();
@@ -2468,6 +3010,12 @@
     const _burstDir = new THREE.Vector3();
     const _burstNoise = new THREE.Vector3();
     const _burstVel = new THREE.Vector3();
+    const _trailSide = new THREE.Vector3();
+    const _trailCamDir = new THREE.Vector3();
+    const _trailSegDir = new THREE.Vector3();
+    const _zAxis = new THREE.Vector3(0, 0, 1);
+    const _yAxis = new THREE.Vector3(0, 1, 0);
+    const _defaultCamPos = new THREE.Vector3(0, 3, 12);
 
     class ParticleEngine {
       constructor(scene) {
@@ -2475,42 +3023,137 @@
         this.glowTex = Textures.createGlowSprite();
         this.sparkTex = Textures.createSparkleSprite();
 
-        // 1. Inward Spiral Vortex Particles
+        // --- Phase 5: Bounded Inward Vortex Pool with Dual Roles & Per-Particle Shader ---
         this.MAX_VORTEX = 280;
         this.vortexGeo = new THREE.BufferGeometry();
         this.vortexPos = new Float32Array(this.MAX_VORTEX * 3);
         this.vortexCol = new Float32Array(this.MAX_VORTEX * 3);
+        this.vortexSize = new Float32Array(this.MAX_VORTEX);
+        this.vortexAlpha = new Float32Array(this.MAX_VORTEX);
+
         this.vortexRadii = new Float32Array(this.MAX_VORTEX);
         this.vortexAngles = new Float32Array(this.MAX_VORTEX);
         this.vortexY = new Float32Array(this.MAX_VORTEX);
         this.vortexSpeed = new Float32Array(this.MAX_VORTEX);
+        this.vortexPath = new Uint8Array(this.MAX_VORTEX); // 0, 1, 2 (3 intentional orbit paths)
+        this.vortexRole = new Uint8Array(this.MAX_VORTEX); // 0 = inward spark (80%), 1 = soft wisp (20%)
 
         for (let i = 0; i < this.MAX_VORTEX; i++) {
-          this.resetVortexParticle(i, 0);
+          this.vortexRole[i] = i >= 224 ? 1 : 0; // 80% sparks, 20% soft wisps
+          this.vortexPath[i] = i % 3;
+          this.resetVortexParticle(i, 0, 0);
           this.vortexPos[i * 3] = 0;
           this.vortexPos[i * 3 + 1] = -100;
           this.vortexPos[i * 3 + 2] = 0;
+          this.vortexAlpha[i] = 0.0;
         }
 
         this.vortexGeo.setAttribute('position', new THREE.BufferAttribute(this.vortexPos, 3));
         this.vortexGeo.setAttribute('color', new THREE.BufferAttribute(this.vortexCol, 3));
+        this.vortexGeo.setAttribute('aSize', new THREE.BufferAttribute(this.vortexSize, 1));
+        this.vortexGeo.setAttribute('aAlpha', new THREE.BufferAttribute(this.vortexAlpha, 1));
 
-        const matVortex = new THREE.PointsMaterial({
-          size: 1.1,
-          vertexColors: true,
+        // Custom ShaderMaterial providing per-particle size, alpha, and additive HDR bloom contribution
+        const matVortex = new THREE.ShaderMaterial({
+          uniforms: {
+            uTexture: { value: this.glowTex }
+          },
+          vertexShader: `
+            attribute float aSize;
+            attribute float aAlpha;
+            varying vec3 vColor;
+            varying float vAlpha;
+            void main() {
+              vColor = color;
+              vAlpha = aAlpha;
+              vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+              gl_PointSize = aSize * (190.0 / -mvPos.z);
+              gl_Position = projectionMatrix * mvPos;
+            }
+          `,
+          fragmentShader: `
+            uniform sampler2D uTexture;
+            varying vec3 vColor;
+            varying float vAlpha;
+            void main() {
+              vec4 tex = texture2D(uTexture, gl_PointCoord);
+              gl_FragColor = vec4(vColor * tex.rgb, tex.a * vAlpha);
+            }
+          `,
           transparent: true,
-          opacity: 0.9,
-          map: this.glowTex,
           blending: THREE.AdditiveBlending,
-          depthWrite: false
+          depthWrite: false,
+          vertexColors: true
         });
+
         this.vortexPoints = new THREE.Points(this.vortexGeo, matVortex);
-        // Phase 0: Disable frustum culling to prevent stale bounds from culling active particles
         this.vortexPoints.frustumCulled = false;
         this.vortexPoints.visible = false;
         this.scene.add(this.vortexPoints);
 
-        // 2. High-Velocity Sparks Pool
+        // --- Phase 5: Luminous Orbital Ribbon Arc around Gem ---
+        const arcSegs = 28;
+        const arcGeo = new THREE.BufferGeometry();
+        const arcPositions = new Float32Array((arcSegs + 1) * 2 * 3);
+        const arcColors = new Float32Array((arcSegs + 1) * 2 * 3);
+        const arcIndices = [];
+
+        const arcSpan = Math.PI * 1.35; // 243 degree graceful arc
+        for (let i = 0; i <= arcSegs; i++) {
+          const t = i / arcSegs;
+          const angle = t * arcSpan;
+          const rInner = 0.52;
+          const rOuter = 0.68;
+          const xIn = Math.cos(angle) * rInner;
+          const zIn = Math.sin(angle) * rInner;
+          const xOut = Math.cos(angle) * rOuter;
+          const zOut = Math.sin(angle) * rOuter;
+
+          const vIdx = i * 2;
+          arcPositions[vIdx * 3] = xIn;
+          arcPositions[vIdx * 3 + 1] = 0;
+          arcPositions[vIdx * 3 + 2] = zIn;
+
+          arcPositions[(vIdx + 1) * 3] = xOut;
+          arcPositions[(vIdx + 1) * 3 + 1] = 0;
+          arcPositions[(vIdx + 1) * 3 + 2] = zOut;
+
+          const taper = Math.sin(t * Math.PI);
+          const colR = 0.2 + 0.8 * taper;
+          const colG = 0.9 + 0.1 * taper;
+          const colB = 1.0;
+
+          arcColors[vIdx * 3] = colR;
+          arcColors[vIdx * 3 + 1] = colG;
+          arcColors[vIdx * 3 + 2] = colB;
+
+          arcColors[(vIdx + 1) * 3] = colR * 0.7;
+          arcColors[(vIdx + 1) * 3 + 1] = colG * 0.7;
+          arcColors[(vIdx + 1) * 3 + 2] = colB * 0.7;
+
+          if (i < arcSegs) {
+            arcIndices.push(vIdx, vIdx + 1, vIdx + 2);
+            arcIndices.push(vIdx + 1, vIdx + 3, vIdx + 2);
+          }
+        }
+        arcGeo.setAttribute('position', new THREE.BufferAttribute(arcPositions, 3));
+        arcGeo.setAttribute('color', new THREE.BufferAttribute(arcColors, 3));
+        arcGeo.setIndex(arcIndices);
+
+        const arcMat = new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide
+        });
+        this.orbitalArc = new THREE.Mesh(arcGeo, arcMat);
+        this.orbitalArc.visible = false;
+        this.orbitRibbonMesh = this.orbitalArc;
+        this.scene.add(this.orbitalArc);
+
+        // --- Phase 6: High-Velocity Sparks Pool with Priority Policy ---
         this.MAX_SPARKS = 220;
         this.sparks = [];
         const sparkGeo = new THREE.BufferGeometry();
@@ -2522,6 +3165,7 @@
         for (let i = 0; i < this.MAX_SPARKS; i++) {
           this.sparks.push({
             active: false,
+            priority: 0, // 0 = low priority (trail sparks), 1 = hero (release/impact)
             pos: new THREE.Vector3(0, -100, 0),
             vel: new THREE.Vector3(),
             life: 0,
@@ -2532,7 +3176,7 @@
         }
 
         const matSparks = new THREE.PointsMaterial({
-          size: 1.4,
+          size: 1.35,
           vertexColors: true,
           transparent: true,
           opacity: 1.0,
@@ -2541,15 +3185,15 @@
           depthWrite: false
         });
         this.sparkPoints = new THREE.Points(sparkGeo, matSparks);
-        // Phase 0: Disable frustum culling on sparks pool
         this.sparkPoints.frustumCulled = false;
         this.sparkPoints.visible = false;
         this.scene.add(this.sparkPoints);
 
-        // 3. Shockwave Expanding Rings
+        // --- Phase 6: Unit-Radius Shockwave Expanding Rings ---
+        // Base geometry has outer radius = 1.0, so scale directly equals world-unit radius!
         this.shockwaves = [];
         for (let i = 0; i < 4; i++) {
-          const ringGeo = new THREE.RingGeometry(0.1, 0.45, 32);
+          const ringGeo = new THREE.RingGeometry(0.1, 1.0, 32);
           const matRing = new THREE.MeshBasicMaterial({
             color: 0x00f0ff,
             transparent: true,
@@ -2567,113 +3211,337 @@
             radius: 0.1,
             maxRadius: 6.5,
             life: 0,
-            maxLife: 0.6
+            maxLife: 0.55
           });
+        }
+
+        // --- Phase 6: Dark Stone Debris Chips Pool (Preallocated 12 chips) ---
+        this.MAX_CHIPS = 12;
+        this.chips = [];
+        const chipGeo = new THREE.DodecahedronGeometry(0.08, 0);
+        const chipMat = new THREE.MeshStandardMaterial({
+          color: 0x242833, // Muted slate stone
+          roughness: 0.95,
+          metalness: 0.0
+        });
+
+        for (let i = 0; i < 12; i++) {
+          const chipMesh = new THREE.Mesh(chipGeo, chipMat);
+          chipMesh.visible = false;
+          chipMesh.castShadow = true;
+          this.scene.add(chipMesh);
+          this.chips.push({
+            mesh: chipMesh,
+            active: false,
+            pos: new THREE.Vector3(),
+            vel: new THREE.Vector3(),
+            rotVel: new THREE.Vector3(),
+            life: 0,
+            maxLife: 0.85
+          });
+        }
+
+        this.releaseClearing = false;
+        this.releaseClearTimer = 0;
+      }
+
+      resetVortexParticle(i, gemPos, chargeEnergy) {
+        const isWisp = this.vortexRole[i] === 1;
+
+        if (chargeEnergy >= 0.80) {
+          // Peak charge: tightly compressed field
+          this.vortexRadii[i] = 0.35 + rng.next() * 0.75;
+        } else {
+          this.vortexRadii[i] = 2.2 + rng.next() * 3.2;
+        }
+
+        this.vortexAngles[i] = rng.next() * Math.PI * 2;
+        this.vortexY[i] = (rng.next() - 0.5) * (isWisp ? 2.4 : 1.6);
+        this.vortexSpeed[i] = isWisp ? (1.0 + rng.next() * 1.5) : (2.4 + rng.next() * 3.2);
+
+        if (isWisp) {
+          // Soft atmospheric wisps: faint violet/blue outer accents
+          this.vortexCol[i * 3] = 0.45;
+          this.vortexCol[i * 3 + 1] = 0.35;
+          this.vortexCol[i * 3 + 2] = 0.95;
+          this.vortexSize[i] = 2.6 + rng.next() * 1.4;
+          this.vortexAlpha[i] = 0.45;
+        } else {
+          // Small inward sparks: tiny near-white core & dominant cyan
+          const isWhiteCore = rng.next() > 0.65;
+          this.vortexCol[i * 3] = isWhiteCore ? 0.92 : 0.15;
+          this.vortexCol[i * 3 + 1] = isWhiteCore ? 0.98 : 0.92;
+          this.vortexCol[i * 3 + 2] = 1.0;
+          this.vortexSize[i] = 1.0 + rng.next() * 0.6;
+          this.vortexAlpha[i] = 0.85;
         }
       }
 
-      resetVortexParticle(i, gemPos) {
-        this.vortexRadii[i] = 2.5 + rng.next() * 4.5;
-        this.vortexAngles[i] = rng.next() * Math.PI * 2;
-        this.vortexY[i] = (rng.next() - 0.5) * 3.5;
-        this.vortexSpeed[i] = 1.6 + rng.next() * 3.2;
+      updateVortex(dt, gemPos, chargeEnergy, isReleased) {
+        if (isReleased) {
+          // Phase 5 Release Cleanup: Rapidly clear visual space around staff within 0.15s
+          this.releaseClearing = true;
+          this.releaseClearTimer += dt;
+          if (this.orbitalArc) this.orbitalArc.visible = false;
 
-        const isElectric = rng.next() > 0.4;
-        this.vortexCol[i * 3] = isElectric ? 0.3 : 0.8;
-        this.vortexCol[i * 3 + 1] = isElectric ? 0.95 : 0.2;
-        this.vortexCol[i * 3 + 2] = 1.0;
-      }
+          let anyVisible = false;
+          for (let i = 0; i < this.MAX_VORTEX; i++) {
+            this.vortexAlpha[i] = Math.max(0, this.vortexAlpha[i] - dt * 6.5);
+            if (this.vortexAlpha[i] > 0.01) {
+              anyVisible = true;
+              this.vortexRadii[i] += this.vortexSpeed[i] * dt * 2.5; // disperse outwards
+              const a = this.vortexAngles[i];
+              const r = this.vortexRadii[i];
+              this.vortexPos[i * 3] = gemPos.x + Math.cos(a) * r;
+              this.vortexPos[i * 3 + 1] = gemPos.y + this.vortexY[i];
+              this.vortexPos[i * 3 + 2] = gemPos.z + Math.sin(a) * r;
+            } else {
+              this.vortexPos[i * 3 + 1] = -100;
+            }
+          }
 
-      updateVortex(dt, gemPos, chargeIntensity) {
-        if (chargeIntensity <= 0.01) {
+          this.vortexPoints.visible = anyVisible;
+          if (anyVisible) {
+            this.vortexGeo.attributes.position.needsUpdate = true;
+            this.vortexGeo.attributes.aAlpha.needsUpdate = true;
+          }
+          return;
+        }
+
+        this.releaseClearing = false;
+        this.releaseClearTimer = 0;
+
+        if (chargeEnergy <= 0.005) {
           if (this.vortexPoints.visible) {
             this.vortexPoints.visible = false;
+          }
+          if (this.orbitalArc) {
+            this.orbitalArc.visible = false;
           }
           return;
         }
 
         this.vortexPoints.visible = true;
 
-        for (let i = 0; i < this.MAX_VORTEX; i++) {
-          this.vortexRadii[i] -= this.vortexSpeed[i] * dt * (1.0 + chargeIntensity * 2.5);
-          this.vortexAngles[i] += (3.5 + chargeIntensity * 6.0) * dt;
-          this.vortexY[i] *= Math.max(0, 1.0 - dt * 2.8);
+        // Target active particle population based on choreography curve
+        // 0–30%: ~40–70; 30–80%: ~70–170; 80–100%: ~180–220 compressed!
+        let targetActive = 40;
+        if (chargeEnergy < 0.25) {
+          targetActive = Math.round(40 + (chargeEnergy / 0.25) * 35);
+        } else if (chargeEnergy < 0.80) {
+          const u = (chargeEnergy - 0.25) / 0.55;
+          targetActive = Math.round(75 + u * 105);
+        } else {
+          const u = (chargeEnergy - 0.80) / 0.20;
+          targetActive = Math.round(180 + u * 35);
+        }
 
-          if (this.vortexRadii[i] <= 0.25) {
-            this.resetVortexParticle(i, gemPos);
+        const isCompressing = chargeEnergy >= 0.80;
+
+        for (let i = 0; i < this.MAX_VORTEX; i++) {
+          if (i >= targetActive) {
+            this.vortexPos[i * 3 + 1] = -100;
+            this.vortexAlpha[i] = 0;
+            continue;
+          }
+
+          const isWisp = this.vortexRole[i] === 1;
+          const path = this.vortexPath[i];
+
+          // Angular velocity & inward progression
+          const angSpeed = (3.2 + chargeEnergy * 7.5) * (path === 1 ? -1.0 : 1.0);
+          this.vortexAngles[i] += angSpeed * dt;
+
+          if (isCompressing) {
+            // Phase 5: Peak Charge Compression — Outer field thins, core tightens toward gem
+            const targetR = 0.25 + (i / targetActive) * 0.65;
+            this.vortexRadii[i] = THREE.MathUtils.lerp(this.vortexRadii[i], targetR, dt * 5.5);
+            this.vortexY[i] *= Math.max(0, 1.0 - dt * 5.0);
+          } else {
+            this.vortexRadii[i] -= this.vortexSpeed[i] * dt * (0.85 + chargeEnergy * 2.2);
+            this.vortexY[i] *= Math.max(0, 1.0 - dt * 2.2);
+          }
+
+          if (this.vortexRadii[i] <= 0.20) {
+            this.resetVortexParticle(i, gemPos, chargeEnergy);
           }
 
           const r = this.vortexRadii[i];
           const a = this.vortexAngles[i];
-          this.vortexPos[i * 3] = gemPos.x + Math.cos(a) * r;
-          this.vortexPos[i * 3 + 1] = gemPos.y + this.vortexY[i];
-          this.vortexPos[i * 3 + 2] = gemPos.z + Math.sin(a) * r;
+          const y = this.vortexY[i];
+
+          // 3 Distinct Orbital Paths with varying inclination & tilt
+          let px = 0, py = 0, pz = 0;
+          if (path === 0) {
+            // Path 0: Gentle equatorial inclination (~18 deg)
+            px = Math.cos(a) * r;
+            py = y + Math.sin(a) * r * 0.31;
+            pz = Math.sin(a) * r * 0.95;
+          } else if (path === 1) {
+            // Path 1: Steep inclined plane (~58 deg, counter-rotating)
+            px = Math.cos(a) * r * 0.53;
+            py = y + Math.sin(a) * r * 0.85;
+            pz = Math.cos(a) * r * 0.85;
+          } else {
+            // Path 2: Polar ascending/descending spiral (~-42 deg)
+            px = Math.cos(a) * r * 0.74;
+            py = y - Math.sin(a) * r * 0.67;
+            pz = Math.sin(a) * r * 0.74;
+          }
+
+          this.vortexPos[i * 3] = gemPos.x + px;
+          this.vortexPos[i * 3 + 1] = gemPos.y + py;
+          this.vortexPos[i * 3 + 2] = gemPos.z + pz;
+
+          // Alpha fade near core and outer boundary
+          const distNorm = THREE.MathUtils.clamp((r - 0.2) / 2.0, 0, 1);
+          const baseAlpha = isWisp ? 0.45 : 0.85;
+          this.vortexAlpha[i] = baseAlpha * Math.sin(distNorm * Math.PI) * Math.min(1.0, chargeEnergy * 1.5);
         }
 
         this.vortexGeo.attributes.position.needsUpdate = true;
-        // Phase 0: Mark color dirty so dynamic particle color variations reach GPU
         this.vortexGeo.attributes.color.needsUpdate = true;
+        this.vortexGeo.attributes.aSize.needsUpdate = true;
+        this.vortexGeo.attributes.aAlpha.needsUpdate = true;
+
+        // Update Orbital Arc Mesh
+        if (this.orbitalArc) {
+          this.orbitalArc.visible = true;
+          this.orbitalArc.position.copy(gemPos);
+          this.orbitalArc.rotation.z += (2.2 + chargeEnergy * 7.0) * dt;
+          this.orbitalArc.rotation.x = 0.35 + Math.sin(this.orbitalArc.rotation.z * 0.5) * 0.1;
+          const arcScale = THREE.MathUtils.lerp(1.15, 0.55, chargeEnergy);
+          this.orbitalArc.scale.set(arcScale, arcScale, arcScale);
+          this.orbitalArc.material.opacity = Math.min(0.85, chargeEnergy * 0.95);
+        }
       }
 
-      spawnShockwave(pos, normal, maxRadius, duration, colorHex) {
+      onRelease(gemPos, dir) {
+        // Stop gathering vortex and clear staff space immediately
+        this.releaseClearing = true;
+        if (this.orbitalArc) this.orbitalArc.visible = false;
+
+        // Directional flash shockwave aligned to spell direction
+        this.spawnShockwave(gemPos, dir, 3.8, 0.35, 0x00f0ff);
+
+        // Focused directional cone burst forward (45 sparks)
+        this.spawnBurst(gemPos, 45, 14.0, dir, 0x00f0ff, 1);
+      }
+
+      onImpact(impactPoint, normal) {
+        // Stage 1: Compact near-white flash (0-0.06s)
+        this.spawnBurst(impactPoint, 45, 10.0, null, 0xffffff, 1);
+
+        // Stage 2: Surface-facing shockwave aligned strictly to monolith strike normal (with z-offset to avoid z-fighting)
+        this.spawnShockwave(impactPoint, normal, 6.5, 0.45, 0x00f0ff, 0.04);
+
+        // Stage 2: Outward directional sparks reflected off monolith face into scene
+        // (normal is outward-facing (-1,0,0); do NOT invert into monolith wall)
+        this.spawnBurst(impactPoint, 70, 13.5, normal, 0x00f0ff, 1);
+
+        // Stage 3: Ground ring centered at ground height (y = 0.05), aligned to +Y (with z-offset)
+        _scratchVec2.set(impactPoint.x - 1.2, 0.05, impactPoint.z);
+        this.spawnShockwave(_scratchVec2, _yAxis, 5.5, 0.55, 0x67ffeb, 0.02);
+
+        // Stage 3: Dark stone debris chips tumbling from monolith outward into scene
+        this.spawnDebrisChips(impactPoint, normal);
+
+        // Stage 4: Lingering embers fading over 0.2-0.9s
+        this.spawnBurst(impactPoint, 30, 3.5, null, 0x4dfcff, 1);
+      }
+
+      spawnShockwave(pos, normal, maxRadius, duration, colorHex, normalOffset = 0.04) {
         for (let i = 0; i < this.shockwaves.length; i++) {
           const sw = this.shockwaves[i];
           if (!sw.active) {
             sw.active = true;
-            sw.radius = 0.2;
+            sw.radius = 0.15;
             sw.maxRadius = maxRadius;
             sw.life = 0;
             sw.maxLife = duration;
-            sw.mesh.position.copy(pos);
-            sw.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+            _scratchDir.copy(normal).normalize();
+            sw.mesh.position.copy(pos).addScaledVector(_scratchDir, normalOffset);
+            sw.mesh.quaternion.setFromUnitVectors(_zAxis, _scratchDir);
             sw.mesh.material.color.setHex(colorHex || 0x00f0ff);
             sw.mesh.material.opacity = 0.95;
-            sw.mesh.scale.set(1, 1, 1);
+            sw.mesh.scale.set(0.15, 0.15, 0.15);
             sw.mesh.visible = true;
             return;
           }
         }
       }
 
-      spawnBurst(pos, count, speed, spreadConeDir, colorHex) {
-        // Dedicated storage: never alias or mutate input pos or callers' scratch vectors!
+      spawnBurst(pos, count, speed, spreadConeDir, colorHex, priority = 0) {
         _burstOrigin.copy(pos);
-
-        let spawned = 0;
         if (spreadConeDir) {
           _burstDir.copy(spreadConeDir).normalize();
         }
 
-        for (let i = 0; i < this.MAX_SPARKS; i++) {
-          const sp = this.sparks[i];
-          if (!sp.active) {
-            sp.active = true;
-            sp.pos.copy(_burstOrigin);
-            sp.life = 0;
-            sp.maxLife = 0.45 + rng.next() * 0.6;
-            sp.color.setHex(colorHex || 0x00f0ff);
+        let spawned = 0;
 
-            if (spreadConeDir) {
-              _burstNoise.set(
-                (rng.next() - 0.5) * 0.9,
-                (rng.next() - 0.5) * 0.9,
-                (rng.next() - 0.5) * 0.9
-              );
-              _burstVel.copy(_burstDir).add(_burstNoise).normalize().multiplyScalar(speed * (0.6 + rng.next() * 0.8));
-              sp.vel.copy(_burstVel);
-            } else {
-              const theta = rng.next() * Math.PI * 2;
-              const phi = Math.acos(rng.next() * 2 - 1);
-              sp.vel.set(
-                Math.sin(phi) * Math.cos(theta),
-                Math.sin(phi) * Math.sin(theta),
-                Math.cos(phi)
-              ).multiplyScalar(speed * (0.4 + rng.next() * 0.9));
+        // If pool is near capacity and priority is high (hero effect), recycle low-priority sparks first
+        for (let pass = 0; pass < 2; pass++) {
+          for (let i = 0; i < this.MAX_SPARKS; i++) {
+            const sp = this.sparks[i];
+            const canUse = !sp.active || (pass === 1 && sp.priority === 0 && priority > 0);
+
+            if (canUse) {
+              sp.active = true;
+              sp.priority = priority;
+              sp.pos.copy(_burstOrigin);
+              sp.life = 0;
+              sp.maxLife = 0.35 + rng.next() * 0.45;
+              sp.color.setHex(colorHex || 0x00f0ff);
+
+              if (spreadConeDir) {
+                _burstNoise.set(
+                  (rng.next() - 0.5) * 0.75,
+                  (rng.next() - 0.5) * 0.75,
+                  (rng.next() - 0.5) * 0.75
+                );
+                _burstVel.copy(_burstDir).add(_burstNoise).normalize().multiplyScalar(speed * (0.65 + rng.next() * 0.7));
+                sp.vel.copy(_burstVel);
+              } else {
+                const theta = rng.next() * Math.PI * 2;
+                const phi = Math.acos(rng.next() * 2 - 1);
+                sp.vel.set(
+                  Math.sin(phi) * Math.cos(theta),
+                  Math.sin(phi) * Math.sin(theta),
+                  Math.cos(phi)
+                ).multiplyScalar(speed * (0.4 + rng.next() * 0.8));
+              }
+
+              spawned++;
+              if (spawned >= count) return;
             }
-
-            spawned++;
-            if (spawned >= count) break;
           }
+        }
+        if (spawned < count) {
+          this.droppedSparksCount = (this.droppedSparksCount || 0) + (count - spawned);
+        }
+      }
+
+      spawnDebrisChips(impactPoint, dir) {
+        for (let i = 0; i < this.chips.length; i++) {
+          const chip = this.chips[i];
+          chip.active = true;
+          chip.life = 0;
+          chip.maxLife = 0.75 + rng.next() * 0.25;
+          chip.pos.copy(impactPoint);
+          chip.mesh.position.copy(chip.pos);
+
+          _burstNoise.set(
+            (rng.next() - 0.5) * 0.8,
+            rng.next() * 0.6 + 0.2, // bias upwards
+            (rng.next() - 0.5) * 0.8
+          );
+          chip.vel.copy(dir).add(_burstNoise).normalize().multiplyScalar(4.5 + rng.next() * 4.5);
+          chip.rotVel.set(
+            (rng.next() - 0.5) * 12.0,
+            (rng.next() - 0.5) * 12.0,
+            (rng.next() - 0.5) * 12.0
+          );
+          chip.mesh.visible = true;
         }
       }
 
@@ -2687,6 +3555,8 @@
 
       updateSparks(dt) {
         let activeCount = 0;
+        const dragFactor = Math.exp(-2.2 * dt);
+
         for (let i = 0; i < this.MAX_SPARKS; i++) {
           const sp = this.sparks[i];
           if (sp.active) {
@@ -2698,16 +3568,18 @@
               continue;
             }
 
-            sp.vel.y -= 7.5 * dt;
-            sp.vel.multiplyScalar(0.96);
+            sp.vel.y -= 8.5 * dt;
+            sp.vel.multiplyScalar(dragFactor);
             sp.pos.addScaledVector(sp.vel, dt);
 
             if (sp.pos.y < 0.05) {
               sp.pos.y = 0.05;
               sp.vel.y *= -0.45;
+              sp.vel.x *= 0.8;
+              sp.vel.z *= 0.8;
             }
 
-            const alpha = 1.0 - sp.life / sp.maxLife;
+            const alpha = Math.max(0, 1.0 - sp.life / sp.maxLife);
             this.sparkPos[i * 3] = sp.pos.x;
             this.sparkPos[i * 3 + 1] = sp.pos.y;
             this.sparkPos[i * 3 + 2] = sp.pos.z;
@@ -2718,13 +3590,13 @@
           }
         }
 
-        // Toggle spark cloud visibility to skip drawing inactive particles
         this.sparkPoints.visible = activeCount > 0;
         if (activeCount > 0) {
           this.sparkPoints.geometry.attributes.position.needsUpdate = true;
           this.sparkPoints.geometry.attributes.color.needsUpdate = true;
         }
 
+        // Update Shockwaves (using exact world-unit scaling)
         this.shockwaves.forEach((sw) => {
           if (sw.active) {
             sw.life += dt;
@@ -2733,9 +3605,35 @@
               sw.active = false;
               sw.mesh.visible = false;
             } else {
-              const currentR = THREE.MathUtils.lerp(0.2, sw.maxRadius, Math.sin(progress * Math.PI * 0.5));
+              const currentR = THREE.MathUtils.lerp(0.15, sw.maxRadius, Math.sin(progress * Math.PI * 0.5));
               sw.mesh.scale.set(currentR, currentR, currentR);
-              sw.mesh.material.opacity = (1.0 - progress) * 0.9;
+              sw.mesh.material.opacity = (1.0 - progress) * 0.92;
+            }
+          }
+        });
+
+        // Update Debris Chips
+        this.chips.forEach((chip) => {
+          if (chip.active) {
+            chip.life += dt;
+            if (chip.life >= chip.maxLife) {
+              chip.active = false;
+              chip.mesh.visible = false;
+            } else {
+              chip.vel.y -= 14.0 * dt;
+              chip.pos.addScaledVector(chip.vel, dt);
+
+              if (chip.pos.y < 0.05) {
+                chip.pos.y = 0.05;
+                chip.vel.y *= -0.40;
+                chip.vel.x *= 0.70;
+                chip.vel.z *= 0.70;
+              }
+
+              chip.mesh.position.copy(chip.pos);
+              chip.mesh.rotation.x += chip.rotVel.x * dt;
+              chip.mesh.rotation.y += chip.rotVel.y * dt;
+              chip.mesh.rotation.z += chip.rotVel.z * dt;
             }
           }
         });
@@ -2744,6 +3642,10 @@
       dispose() {
         if (this.vortexGeo) this.vortexGeo.dispose();
         if (this.vortexPoints && this.vortexPoints.material) this.vortexPoints.material.dispose();
+        if (this.orbitalArc) {
+          if (this.orbitalArc.geometry) this.orbitalArc.geometry.dispose();
+          if (this.orbitalArc.material) this.orbitalArc.material.dispose();
+        }
         if (this.sparkPoints) {
           if (this.sparkPoints.geometry) this.sparkPoints.geometry.dispose();
           if (this.sparkPoints.material) this.sparkPoints.material.dispose();
@@ -2752,13 +3654,17 @@
           if (sw.mesh.geometry) sw.mesh.geometry.dispose();
           if (sw.mesh.material) sw.mesh.material.dispose();
         });
+        this.chips.forEach(c => {
+          if (c.mesh.geometry) c.mesh.geometry.dispose();
+          if (c.mesh.material) c.mesh.material.dispose();
+        });
         if (this.glowTex) this.glowTex.dispose();
         if (this.sparkTex) this.sparkTex.dispose();
       }
     }
 
     // =========================================================================
-    // 6. HIGH-POWER PROJECTILE SYSTEM (Phase 0 Trail Reset & Launch Correctness)
+    // 6. HERO PROJECTILE & CAMERA-FACING RIBBON TRAIL SYSTEM (Phase 6)
     // =========================================================================
     class ProjectileSystem {
       constructor(scene, particles, env) {
@@ -2770,23 +3676,29 @@
         this.group.visible = false;
         this.scene.add(this.group);
 
-        const coreGeo = new THREE.SphereGeometry(0.42, 16, 16);
+        // Directional Projectile Core: Elongated spindle aligned with velocity
+        const coreGeo = new THREE.CylinderGeometry(0.06, 0.22, 1.1, 12);
+        coreGeo.rotateX(Math.PI / 2); // Orient along Z
         const matCore = new THREE.MeshBasicMaterial({ color: 0xffffff });
         this.coreMesh = new THREE.Mesh(coreGeo, matCore);
         this.group.add(this.coreMesh);
 
-        const haloGeo = new THREE.SphereGeometry(0.85, 16, 16);
-        const matHalo = new THREE.MeshBasicMaterial({
+        // Restrained Directional Plasma Envelope (depthWrite: false, depthTest: true)
+        const envelopeGeo = new THREE.CylinderGeometry(0.14, 0.42, 1.35, 12);
+        envelopeGeo.rotateX(Math.PI / 2);
+        const matEnvelope = new THREE.MeshBasicMaterial({
           color: 0x00f0ff,
           transparent: true,
           opacity: 0.65,
           blending: THREE.AdditiveBlending,
-          depthWrite: false
+          depthWrite: false,
+          depthTest: true
         });
-        this.haloMesh = new THREE.Mesh(haloGeo, matHalo);
-        this.group.add(this.haloMesh);
+        this.envelopeMesh = new THREE.Mesh(envelopeGeo, matEnvelope);
+        this.group.add(this.envelopeMesh);
 
-        const filamentGeo = new THREE.TorusGeometry(0.75, 0.06, 6, 24);
+        // Rotating Energy Filament Rings
+        const filamentGeo = new THREE.TorusGeometry(0.55, 0.04, 6, 20);
         const matFilament = new THREE.MeshBasicMaterial({
           color: 0x67ffeb,
           wireframe: true
@@ -2797,105 +3709,316 @@
         this.group.add(this.filament1);
         this.group.add(this.filament2);
 
-        this.light = new THREE.PointLight(0x00f0ff, 6.0, 18, 1.8);
+        this.light = new THREE.PointLight(0x00f0ff, 6.0, 16, 1.8);
         this.group.add(this.light);
 
+        // --- Phase 6: Preallocated 48-Sample Camera-Facing Ribbon Strip ---
+        this.MAX_TRAIL = 48;
+        this.trailPoints = new Float32Array(this.MAX_TRAIL * 3);
+        this.trailAges = new Float32Array(this.MAX_TRAIL);
+        this.trailCount = 0;
+
+        // Ribbon strip geometry: 48 pairs of vertices = 96 vertices, 47 quads = 94 triangles
+        this.ribbonGeo = new THREE.BufferGeometry();
+        this.ribbonPositions = new Float32Array(this.MAX_TRAIL * 2 * 3);
+        this.ribbonColors = new Float32Array(this.MAX_TRAIL * 2 * 3);
+        const ribbonIndices = [];
+
+        for (let i = 0; i < this.MAX_TRAIL - 1; i++) {
+          const v = i * 2;
+          ribbonIndices.push(v, v + 1, v + 2);
+          ribbonIndices.push(v + 1, v + 3, v + 2);
+        }
+
+        this.ribbonGeo.setAttribute('position', new THREE.BufferAttribute(this.ribbonPositions, 3));
+        this.ribbonGeo.setAttribute('color', new THREE.BufferAttribute(this.ribbonColors, 3));
+        this.ribbonGeo.setIndex(ribbonIndices);
+
+        const ribbonMat = new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          depthTest: true,
+          side: THREE.DoubleSide
+        });
+        this.ribbonMesh = new THREE.Mesh(this.ribbonGeo, ribbonMat);
+        this.ribbonMesh.frustumCulled = false;
+        this.ribbonMesh.visible = false;
+        this.scene.add(this.ribbonMesh);
+
         this.active = false;
+        this.justLaunched = false;
+        this.originPos = new THREE.Vector3();
+        this.targetPos = new THREE.Vector3();
+        this.targetNormal = new THREE.Vector3(-1, 0, 0);
         this.pos = new THREE.Vector3();
-        this.vel = new THREE.Vector3();
-        this.targetX = 10.5;
-        this.trailTimer = 0;
+        this.dir = new THREE.Vector3();
+        this.speed = 28.0; // Astra specified nominal speed
+        this.totalDistance = 0;
+        this.traveledDistance = 0;
+        this.lastSamplePos = new THREE.Vector3();
+        this.trailSparkRemainder = 0;
+        this.castId = 0;
+
+        this.pendingImpact = null;
       }
 
-      launch(originPos, targetPos) {
+      launch(originPos, targetPos, targetNormal, castId) {
+        if (this.active) return; // Do not permit a new active projectile to overwrite an old one
         this.active = true;
+        this.justLaunched = true;
+        this.castId = castId;
         this.group.visible = true;
+
+        this.originPos.copy(originPos);
+        this.targetPos.copy(targetPos);
+        this.targetNormal.copy(targetNormal || new THREE.Vector3(-1, 0, 0));
         this.pos.copy(originPos);
         this.group.position.copy(this.pos);
 
-        // Phase 0: Reset projectile trail timer and state cleanly
-        this.trailTimer = 0;
+        this.dir.subVectors(targetPos, originPos).normalize();
+        this.totalDistance = originPos.distanceTo(targetPos);
+        this.traveledDistance = 0;
 
-        _scratchDir.subVectors(targetPos, originPos).normalize();
-        this.vel.copy(_scratchDir).multiplyScalar(28.0);
-        this.targetX = targetPos.x;
+        // Orient core and plasma envelope along velocity
+        this.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), this.dir);
+
+        // Reset ribbon trail history cleanly
+        this.trailCount = 1;
+        this.trailPoints[0] = originPos.x;
+        this.trailPoints[1] = originPos.y;
+        this.trailPoints[2] = originPos.z;
+        this.trailAges[0] = 0;
+        this.lastSamplePos.copy(originPos);
+        this.trailSparkRemainder = 0;
+
+        this.ribbonMesh.visible = true;
+        this.pendingImpact = null;
       }
 
-      update(dt) {
-        if (!this.active) return;
-
-        this.pos.addScaledVector(this.vel, dt);
-        this.group.position.copy(this.pos);
-
-        this.filament1.rotation.z += 18.0 * dt;
-        this.filament2.rotation.y += 22.0 * dt;
-        this.coreMesh.scale.setScalar(1.0 + 0.15 * Math.sin(this.pos.x * 8.0));
-
-        // Spawn spark trail with protected vectors
-        this.trailTimer += dt;
-        if (this.trailTimer > 0.018) {
-          this.trailTimer = 0;
-          _scratchVec1.copy(this.pos);
-          _scratchVec1.x -= 0.4;
-          _scratchVec1.y += (rng.next() - 0.5) * 0.2;
-          _scratchVec1.z += (rng.next() - 0.5) * 0.2;
-          _scratchDir.set(-1, 0, 0);
-          this.particles.spawnBurst(
-            _scratchVec1,
-            3,
-            2.5,
-            _scratchDir,
-            0x00f0ff
-          );
+      addTrailPoint(x, y, z) {
+        if (this.trailCount < this.MAX_TRAIL) {
+          // Shift existing points back
+          for (let i = this.trailCount; i > 0; i--) {
+            this.trailPoints[i * 3] = this.trailPoints[(i - 1) * 3];
+            this.trailPoints[i * 3 + 1] = this.trailPoints[(i - 1) * 3 + 1];
+            this.trailPoints[i * 3 + 2] = this.trailPoints[(i - 1) * 3 + 2];
+            this.trailAges[i] = this.trailAges[i - 1];
+          }
+          this.trailCount++;
+        } else {
+          for (let i = this.MAX_TRAIL - 1; i > 0; i--) {
+            this.trailPoints[i * 3] = this.trailPoints[(i - 1) * 3];
+            this.trailPoints[i * 3 + 1] = this.trailPoints[(i - 1) * 3 + 1];
+            this.trailPoints[i * 3 + 2] = this.trailPoints[(i - 1) * 3 + 2];
+            this.trailAges[i] = this.trailAges[i - 1];
+          }
         }
-
-        if (this.pos.x >= this.targetX) {
-          this.detonate();
-        }
+        this.trailPoints[0] = x;
+        this.trailPoints[1] = y;
+        this.trailPoints[2] = z;
+        this.trailAges[0] = 0;
       }
 
-      detonate() {
-        this.active = false;
-        this.group.visible = false;
-
-        const impactPoint = new THREE.Vector3(this.targetX, this.pos.y, this.pos.z);
-
-        this.env.triggerImpactFlash();
-        this.particles.spawnShockwave(impactPoint, new THREE.Vector3(1, 0, 0), 8.5, 0.75, 0x00f0ff);
-        this.particles.spawnShockwave(impactPoint, new THREE.Vector3(0, 1, 0), 7.0, 0.65, 0x67ffeb);
-        this.particles.spawnBurst(impactPoint, 95, 14.0, null, 0x00f0ff);
-        this.particles.spawnBurst(impactPoint, 45, 8.5, null, 0xffffff);
-
-        audio.playImpactBoom();
-
-        if (window.director) {
-          window.director.addTrauma(0.85);
+      update(dt, camera) {
+        // 1. Advance active ribbon samples aging
+        for (let i = 0; i < this.trailCount; i++) {
+          this.trailAges[i] += dt;
         }
 
-        if (window.app && window.app.eventCounts) {
-          window.app.eventCounts.detonations++;
+        // Cull expired samples (>0.25s)
+        while (this.trailCount > 1 && this.trailAges[this.trailCount - 1] > 0.25) {
+          this.trailCount--;
         }
+
+        if (this.active) {
+          if (this.justLaunched) {
+            // Birth step at simulation boundary: position strictly at origin coinciding with gem (distance 0.0000)
+            this.justLaunched = false;
+            this.group.position.copy(this.pos);
+          } else {
+            const stepDist = this.speed * dt;
+
+            if (this.traveledDistance + stepDist >= this.totalDistance) {
+              // Exact impact contact resolution (interpolated endpoint crossing!)
+              this.traveledDistance = this.totalDistance;
+              this.pos.copy(this.targetPos);
+              this.addTrailPoint(this.pos.x, this.pos.y, this.pos.z);
+
+              this.active = false;
+              this.group.visible = false;
+
+              // Queue impact event once for SpellDirector dispatch
+              this.pendingImpact = {
+                castId: this.castId,
+                point: this.targetPos.clone(),
+                normal: this.targetNormal.clone()
+              };
+            } else {
+              // Travel along line of fire
+              this.traveledDistance += stepDist;
+              this.pos.lerpVectors(this.originPos, this.targetPos, this.traveledDistance / this.totalDistance);
+              this.group.position.copy(this.pos);
+
+              // Resample trail distance: add samples every ~0.18 units
+              const distSinceLast = this.pos.distanceTo(this.lastSamplePos);
+              const sampleThreshold = 0.18;
+
+              if (distSinceLast >= sampleThreshold) {
+                const numSamples = Math.min(6, Math.floor(distSinceLast / sampleThreshold));
+                for (let s = 1; s <= numSamples; s++) {
+                  const subT = s / numSamples;
+                  _scratchVec1.lerpVectors(this.lastSamplePos, this.pos, subT);
+                  this.addTrailPoint(_scratchVec1.x, _scratchVec1.y, _scratchVec1.z);
+                }
+                this.lastSamplePos.copy(this.pos);
+              }
+
+              // Sparse residual trail sparks along travel segment with remainder preserved
+              this.trailSparkRemainder += dt * 38.0;
+              const sparkCount = Math.floor(this.trailSparkRemainder);
+              if (sparkCount > 0) {
+                this.trailSparkRemainder -= sparkCount;
+                _scratchVec1.copy(this.pos).addScaledVector(this.dir, -0.4);
+                _scratchVec1.x += (rng.next() - 0.5) * 0.15;
+                _scratchVec1.y += (rng.next() - 0.5) * 0.15;
+                _scratchVec1.z += (rng.next() - 0.5) * 0.15;
+                _scratchDir.copy(this.dir).multiplyScalar(-1.0);
+                this.particles.spawnBurst(_scratchVec1, sparkCount, 2.8, _scratchDir, 0x00f0ff, 0);
+              }
+
+              // Core visual rotations
+              this.filament1.rotation.z += 16.0 * dt;
+              this.filament2.rotation.x += 18.0 * dt;
+              this.coreMesh.scale.set(1.0, 1.0, 1.0 + 0.15 * Math.sin(this.traveledDistance * 4.0));
+            }
+          }
+        }
+
+        // 2. Construct camera-facing ribbon strip vertices
+        this.updateRibbonMesh(camera);
+      }
+
+      updateRibbonMesh(camera) {
+        if (this.trailCount < 2) {
+          this.ribbonMesh.visible = false;
+          return;
+        }
+
+        this.ribbonMesh.visible = true;
+        const camPos = camera ? camera.position : _defaultCamPos;
+
+        for (let i = 0; i < this.trailCount; i++) {
+          const px = this.trailPoints[i * 3];
+          const py = this.trailPoints[i * 3 + 1];
+          const pz = this.trailPoints[i * 3 + 2];
+          const age = this.trailAges[i];
+          const f = i / (this.trailCount - 1);
+
+          // Vector to camera
+          _trailCamDir.set(camPos.x - px, camPos.y - py, camPos.z - pz).normalize();
+
+          // Segment travel direction
+          if (i === 0) {
+            _trailSegDir.set(
+              px - this.trailPoints[3],
+              py - this.trailPoints[4],
+              pz - this.trailPoints[5]
+            ).normalize();
+          } else {
+            _trailSegDir.set(
+              this.trailPoints[(i - 1) * 3] - px,
+              this.trailPoints[(i - 1) * 3 + 1] - py,
+              this.trailPoints[(i - 1) * 3 + 2] - pz
+            ).normalize();
+          }
+
+          // Camera-facing strip lateral perpendicular: normalize(dir x toCamera)
+          _trailSide.crossVectors(_trailSegDir, _trailCamDir).normalize();
+
+          // Tapered width from 0.34 at head down to 0 at tail
+          const ageFade = Math.max(0, 1.0 - age / 0.25);
+          const halfWidth = 0.17 * (1.0 - f * 0.85) * ageFade;
+
+          const vIdx = i * 2;
+          this.ribbonPositions[vIdx * 3] = px + _trailSide.x * halfWidth;
+          this.ribbonPositions[vIdx * 3 + 1] = py + _trailSide.y * halfWidth;
+          this.ribbonPositions[vIdx * 3 + 2] = pz + _trailSide.z * halfWidth;
+
+          this.ribbonPositions[(vIdx + 1) * 3] = px - _trailSide.x * halfWidth;
+          this.ribbonPositions[(vIdx + 1) * 3 + 1] = py - _trailSide.y * halfWidth;
+          this.ribbonPositions[(vIdx + 1) * 3 + 2] = pz - _trailSide.z * halfWidth;
+
+          // Tapered Alpha: 1.0 at head down to 0 at tail & age decay
+          const alpha = (1.0 - f * 0.95) * ageFade;
+          const colR = 0.2 + (1.0 - f) * 0.8;
+          const colG = 0.95;
+          const colB = 1.0;
+
+          this.ribbonColors[vIdx * 3] = colR * alpha;
+          this.ribbonColors[vIdx * 3 + 1] = colG * alpha;
+          this.ribbonColors[vIdx * 3 + 2] = colB * alpha;
+
+          this.ribbonColors[(vIdx + 1) * 3] = colR * alpha;
+          this.ribbonColors[(vIdx + 1) * 3 + 1] = colG * alpha;
+          this.ribbonColors[(vIdx + 1) * 3 + 2] = colB * alpha;
+        }
+
+        this.ribbonGeo.setDrawRange(0, (this.trailCount - 1) * 6);
+        this.ribbonGeo.attributes.position.needsUpdate = true;
+        this.ribbonGeo.attributes.color.needsUpdate = true;
+      }
+
+      consumeImpact() {
+        const imp = this.pendingImpact;
+        this.pendingImpact = null;
+        return imp;
+      }
+
+      dispose() {
+        if (this.ribbonGeo) this.ribbonGeo.dispose();
+        if (this.ribbonMesh && this.ribbonMesh.material) this.ribbonMesh.material.dispose();
+        if (this.coreMesh && this.coreMesh.geometry) this.coreMesh.geometry.dispose();
+        if (this.envelopeMesh && this.envelopeMesh.geometry) this.envelopeMesh.geometry.dispose();
       }
     }
 
     // =========================================================================
-    // 7. CINEMATIC CAMERA DIRECTOR (Presets, Damping, Framing)
+    // 7. CINEMATIC CAMERA DIRECTOR (Phase 7 Camera & Cinematic Response)
     // =========================================================================
     class CameraDirector {
       constructor(camera, domElement) {
         this.camera = camera;
         this.domElement = domElement;
 
-        // Framing: Wizard positioned comfortably on the left (~55% viewport height)
-        // with breathing room from border, clear line of fire to target on the right
-        this.currentPos = new THREE.Vector3(-0.2, 3.4, 12.8);
-        this.targetPos = new THREE.Vector3(-0.2, 3.4, 12.8);
-        this.currentLookAt = new THREE.Vector3(1.4, 2.6, 0);
-        this.targetLookAt = new THREE.Vector3(1.4, 2.6, 0);
+        // Base preset transforms kept strictly separate from dynamic spell offsets
+        this.basePos = new THREE.Vector3(-0.2, 3.4, 12.8);
+        this.baseLookAt = new THREE.Vector3(1.4, 2.6, 0);
+        this.baseFov = 46.0;
+
+        this.currentPos = this.basePos.clone();
+        this.targetPos = this.basePos.clone();
+        this.currentLookAt = this.baseLookAt.clone();
+        this.targetLookAt = this.baseLookAt.clone();
+
+        // Dynamic spell offsets (recalculated each frame, zeroed at rest)
+        this.spellOffsetPos = new THREE.Vector3();
+        this.spellOffsetLookAt = new THREE.Vector3();
+        this.spellFovOffset = 0.0;
+        this._viewDir = new THREE.Vector3();
 
         this.trauma = 0.0;
         this.shakeTimer = 0;
         this.mode = 'cinematic';
+
+        // Check reduced motion user preference (Phase 7 requirement)
+        this.reducedMotion = false;
+        try {
+          if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            this.reducedMotion = true;
+          }
+        } catch (e) {}
 
         this.orbitRadius = 14;
         this.orbitTheta = 0.24;
@@ -2949,7 +4072,12 @@
         const x = this.targetLookAt.x + this.orbitRadius * Math.sin(this.orbitPhi) * Math.sin(this.orbitTheta);
         const y = this.targetLookAt.y + this.orbitRadius * Math.cos(this.orbitPhi);
         const z = this.targetLookAt.z + this.orbitRadius * Math.sin(this.orbitPhi) * Math.cos(this.orbitTheta);
+        this.basePos.set(x, y, z);
         this.targetPos.set(x, y, z);
+        // Suppress scripted offsets immediately in orbit
+        this.spellOffsetPos.set(0, 0, 0);
+        this.spellOffsetLookAt.set(0, 0, 0);
+        this.spellFovOffset = 0.0;
       }
 
       setPreset(name) {
@@ -2958,53 +4086,114 @@
           b.classList.toggle('active', b.dataset.cam === name);
         });
 
+        // Set base preset transforms (never modified by spell animations)
         switch (name) {
           case 'cinematic':
-            // Cinematic: Balanced composition framing wizard (~55% height) with left margin and clear projectile path
-            this.targetPos.set(-0.2, 3.4, 12.8);
-            this.targetLookAt.set(1.4, 2.6, 0);
+            this.basePos.set(-0.2, 3.4, 12.8);
+            this.baseLookAt.set(1.4, 2.6, 0);
+            this.baseFov = 46.0;
             break;
           case 'classic':
-            // Classic: V1 tribute overview
-            this.targetPos.set(2.5, 3.2, 16.0);
-            this.targetLookAt.set(2.5, 2.8, 0);
+            this.basePos.set(2.5, 3.2, 16.0);
+            this.baseLookAt.set(2.5, 2.8, 0);
+            this.baseFov = 46.0;
             break;
           case 'hero':
-            // Hero Portrait: Clear three-quarter portrait with readable face, flowing beard, ornate hat, staff alongside
-            this.targetPos.set(-1.8, 3.4, 5.8);
-            this.targetLookAt.set(-4.3, 3.2, 0.0);
+            this.basePos.set(-1.8, 3.4, 5.8);
+            this.baseLookAt.set(-4.3, 3.2, 0.0);
+            this.baseFov = 46.0;
             break;
           case 'target':
-            // Target Monolith impact vantage
-            this.targetPos.set(14.5, 3.2, 5.5);
-            this.targetLookAt.set(7.5, 3.0, 0);
+            this.basePos.set(14.5, 3.2, 5.5);
+            this.baseLookAt.set(7.5, 3.0, 0);
+            this.baseFov = 46.0;
             break;
           case 'orbit':
             this.updateOrbitPosition();
             break;
         }
+
+        // When switching preset, reset scripted offsets immediately
+        this.spellOffsetPos.set(0, 0, 0);
+        this.spellOffsetLookAt.set(0, 0, 0);
+        this.spellFovOffset = 0.0;
+        this.targetPos.copy(this.basePos);
+        this.targetLookAt.copy(this.baseLookAt);
       }
 
       addTrauma(amount) {
+        if (this.reducedMotion) return;
         this.trauma = Math.min(1.0, this.trauma + amount);
       }
 
-      update(dt, totalTime) {
-        this.currentPos.lerp(this.targetPos, dt * 4.5);
-        this.currentLookAt.lerp(this.targetLookAt, dt * 5.0);
+      onRelease() {
+        if (!this.reducedMotion) {
+          this.addTrauma(0.32); // Restrained trauma impulse per Astra spec
+        }
+      }
 
-        const driftX = this.mode === 'cinematic' ? Math.sin(totalTime * 0.4) * 0.25 : 0;
-        const driftY = this.mode === 'cinematic' ? Math.cos(totalTime * 0.3) * 0.15 : 0;
+      onImpact() {
+        if (!this.reducedMotion) {
+          this.addTrauma(0.38); // Restrained trauma impulse per Astra spec
+        }
+      }
 
+      update(realDt, sample) {
+        this.spellOffsetPos.set(0, 0, 0);
+        this.spellOffsetLookAt.set(0, 0, 0);
+        this.spellFovOffset = 0.0;
+
+        // Scripted framing offsets: Cinematic preset only
+        if (this.mode === 'cinematic' && sample && !this.reducedMotion) {
+          // CHARGE 0–80%: Restrained 5–8% push-in toward raised focus (-4.5, 3.8, 0.0)
+          // FOV eases 46 -> 43.5 deg
+          const push = sample.cameraPush;
+          if (push > 0.001) {
+            // Restrained 5-8% push-in along view direction toward action center
+            this._viewDir.subVectors(this.baseLookAt, this.basePos).normalize();
+            this.spellOffsetPos.addScaledVector(this._viewDir, 0.68 * push);
+            this.spellOffsetLookAt.set(-1.4 * push, 0.65 * push, 0);
+            this.spellFovOffset = -1.5 * push;
+          }
+
+          // RELEASE: Small recoil along view direction (-0.28 units)
+          if (sample.releaseAge >= 0 && sample.releaseAge < 0.35) {
+            const recoil = -0.28 * Math.exp(-sample.releaseAge * 8.0);
+            this._viewDir.subVectors(this.baseLookAt, this.basePos).normalize();
+            this.spellOffsetPos.addScaledVector(this._viewDir, recoil);
+          }
+
+          // IMPACT: Modest look target shift toward monolith
+          if (sample.impactAge >= 0 && sample.impactAge < 0.65) {
+            const shift = 1.15 * Math.exp(-sample.impactAge * 4.0);
+            this.spellOffsetLookAt.x += shift;
+          }
+        }
+
+        // Target camera transform composed cleanly from base + spell offset
+        this.targetPos.copy(this.basePos).add(this.spellOffsetPos);
+        this.targetLookAt.copy(this.baseLookAt).add(this.spellOffsetLookAt);
+
+        // Exponential damping using real delta (responsive at all timeScales)
+        const damp = 1.0 - Math.exp(-5.5 * realDt);
+        this.currentPos.lerp(this.targetPos, damp);
+        this.currentLookAt.lerp(this.targetLookAt, damp);
+
+        // Subtle ambient cinematic breathing drift
+        const totalTime = sample ? sample.totalTime : 0;
+        const driftX = (this.mode === 'cinematic' && !this.reducedMotion) ? Math.sin(totalTime * 0.35) * 0.18 : 0;
+        const driftY = (this.mode === 'cinematic' && !this.reducedMotion) ? Math.cos(totalTime * 0.28) * 0.10 : 0;
+
+        // Controlled deterministic trauma shake using low-frequency harmonic sines (no PRNG desync across FPS)
         let shakeX = 0, shakeY = 0, shakeZ = 0;
-        if (this.trauma > 0.001) {
-          this.shakeTimer += dt * 36.0;
+        if (this.trauma > 0.001 && !this.reducedMotion) {
+          this.shakeTimer += realDt * 32.0;
           const shakeFactor = this.trauma * this.trauma;
-          shakeX = (Math.sin(this.shakeTimer * 1.3) + (rng.next() - 0.5) * 0.4) * 0.45 * shakeFactor;
-          shakeY = (Math.cos(this.shakeTimer * 1.7) + (rng.next() - 0.5) * 0.4) * 0.45 * shakeFactor;
-          shakeZ = (Math.sin(this.shakeTimer * 0.9)) * 0.28 * shakeFactor;
+          shakeX = (Math.sin(this.shakeTimer * 1.35) + 0.35 * Math.sin(this.shakeTimer * 3.1)) * 0.38 * shakeFactor;
+          shakeY = (Math.cos(this.shakeTimer * 1.65) + 0.35 * Math.sin(this.shakeTimer * 2.7)) * 0.38 * shakeFactor;
+          shakeZ = (Math.sin(this.shakeTimer * 0.95) + 0.25 * Math.cos(this.shakeTimer * 2.1)) * 0.22 * shakeFactor;
 
-          this.trauma = Math.max(0, this.trauma - dt * 1.8);
+          this.trauma = Math.max(0, this.trauma - realDt * 2.2);
         }
 
         this.camera.position.set(
@@ -3014,10 +4203,287 @@
         );
 
         this.camera.lookAt(
-          this.currentLookAt.x + shakeX * 0.5,
-          this.currentLookAt.y + shakeY * 0.5,
+          this.currentLookAt.x + shakeX * 0.4,
+          this.currentLookAt.y + shakeY * 0.4,
           this.currentLookAt.z
         );
+
+        // Apply FOV modulation with projection update
+        const effectiveFov = this.baseFov + this.spellFovOffset;
+        if (Math.abs(this.camera.fov - effectiveFov) > 0.05) {
+          this.camera.fov = effectiveFov;
+          this.camera.updateProjectionMatrix();
+        }
+      }
+    }
+
+    // =========================================================================
+    // 8. SPELL DIRECTOR (Phase 4 Timing, Orchestration & Event-Once Ownership)
+    // =========================================================================
+    class SpellDirector {
+      constructor() {
+        this.state = STATE_IDLE;
+        this.stateTime = 0.0;
+        this.totalTime = 0.0;
+        this.castId = 0;
+        this.autoLoop = true;
+
+        this.DUR_IDLE = 2.0;
+        this.DUR_CHARGE = 1.8;
+        this.DUR_CAST = 1.3;
+        this.DUR_RECOVER = 1.0;
+        this.RELEASE_PROGRESS = 0.15; // Release occurs at exactly 15% of CAST (0.195s)
+
+        this.releaseFired = false;
+        this.impactFired = false;
+        this.releaseAge = -1.0;
+        this.impactAge = -1.0;
+
+        this.earlyReleaseSnapshot = null;
+        this.recoverySnapshot = null;
+        this.pendingEvents = [];
+
+      }
+
+      requestCast(characterAdapter) {
+        if (this.state === STATE_IDLE) {
+          this.transitionTo(STATE_CHARGE);
+        } else if (this.state === STATE_RECOVER) {
+          // Retriggering during RECOVER: snapshot current recovery pose to blend smoothly (Phase 4 spec)
+          if (characterAdapter) {
+            this.recoverySnapshot = characterAdapter.capturePoseSnapshot();
+          }
+          this.transitionTo(STATE_CHARGE);
+        } else if (this.state === STATE_CHARGE) {
+          // Manual early release: snapshot current pose to blend smoothly without teleporting
+          if (characterAdapter) {
+            this.earlyReleaseSnapshot = characterAdapter.capturePoseSnapshot();
+          }
+          this.transitionTo(STATE_CAST);
+        }
+      }
+
+      setLoop(enabled) {
+        this.autoLoop = enabled;
+      }
+
+      transitionTo(newState, initialTime = 0.0) {
+        this.state = newState;
+        this.stateTime = initialTime;
+
+        if (this.state === STATE_CHARGE) {
+          this.castId++;
+          this.releaseFired = false;
+          this.impactFired = false;
+          this.releaseAge = -1.0;
+          this.impactAge = -1.0;
+          this.pendingEvents.push({ type: 'CHARGE_START', castId: this.castId });
+        } else if (this.state === STATE_CAST) {
+          this.releaseFired = false;
+          this.releaseAge = -1.0;
+        } else if (this.state === STATE_RECOVER) {
+          this.earlyReleaseSnapshot = null;
+        } else if (this.state === STATE_IDLE) {
+          this.earlyReleaseSnapshot = null;
+          this.recoverySnapshot = null;
+        }
+      }
+
+      advance(simDt) {
+        this.totalTime += simDt;
+        if (this.releaseFired) {
+          this.releaseAge += simDt;
+        }
+        if (this.impactFired) {
+          this.impactAge += simDt;
+        }
+
+        // Phase 4 Requirement: Carry time across state boundaries; process threshold crossings in order
+        let remainingDt = simDt;
+        let loopGuard = 0;
+        while (remainingDt > 0.00001 && loopGuard < 8) {
+          loopGuard++;
+          let timeToBoundary = Infinity;
+          let nextState = -1;
+
+          switch (this.state) {
+            case STATE_IDLE:
+              if (this.autoLoop) {
+                timeToBoundary = Math.max(0, this.DUR_IDLE - this.stateTime);
+                nextState = STATE_CHARGE;
+              }
+              break;
+
+            case STATE_CHARGE:
+              timeToBoundary = Math.max(0, this.DUR_CHARGE - this.stateTime);
+              nextState = STATE_CAST;
+              break;
+
+            case STATE_CAST:
+              if (!this.releaseFired) {
+                const releaseThreshold = this.DUR_CAST * this.RELEASE_PROGRESS;
+                if (this.stateTime < releaseThreshold) {
+                  timeToBoundary = releaseThreshold - this.stateTime;
+                  nextState = -2; // Event threshold crossing marker
+                }
+              }
+              if (timeToBoundary === Infinity) {
+                timeToBoundary = Math.max(0, this.DUR_CAST - this.stateTime);
+                nextState = STATE_RECOVER;
+              }
+              break;
+
+            case STATE_RECOVER:
+              timeToBoundary = Math.max(0, this.DUR_RECOVER - this.stateTime);
+              nextState = STATE_IDLE;
+              break;
+          }
+
+          if (remainingDt < timeToBoundary) {
+            this.stateTime += remainingDt;
+            remainingDt = 0;
+          } else {
+            this.stateTime += timeToBoundary;
+            remainingDt -= timeToBoundary;
+
+            if (nextState === -2) {
+              // Release threshold crossed exactly at 15% CAST
+              this.releaseFired = true;
+              this.releaseAge = remainingDt;
+              this.pendingEvents.push({ type: 'RELEASE', castId: this.castId });
+            } else if (nextState >= 0) {
+              this.transitionTo(nextState, 0.0);
+            } else {
+              this.stateTime += remainingDt;
+              remainingDt = 0;
+            }
+          }
+        }
+      }
+
+      notifyImpact(event) {
+        if (!this.impactFired && event.castId === this.castId) {
+          this.impactFired = true;
+          this.impactAge = 0.0;
+          this.pendingEvents.push({
+            type: 'IMPACT',
+            castId: this.castId,
+            point: event.point,
+            normal: event.normal
+          });
+        }
+      }
+
+      sample() {
+        let progress = 0.0;
+        let chargeEnergy = 0.0;
+
+        switch (this.state) {
+          case STATE_IDLE:
+            progress = Math.min(1.0, this.stateTime / this.DUR_IDLE);
+            chargeEnergy = 0.0;
+            break;
+
+          case STATE_CHARGE:
+            progress = Math.min(1.0, this.stateTime / this.DUR_CHARGE);
+            if (progress >= 0.30) {
+              this.recoverySnapshot = null;
+            }
+            if (progress < 0.30) {
+              const u = progress / 0.30;
+              chargeEnergy = u * u * 0.25;
+            } else if (progress < 0.80) {
+              const u = (progress - 0.30) / 0.50;
+              chargeEnergy = 0.25 + u * u * (3 - 2 * u) * 0.55;
+            } else {
+              const u = (progress - 0.80) / 0.20;
+              chargeEnergy = 0.80 + u * 0.20;
+            }
+            break;
+
+          case STATE_CAST:
+            progress = Math.min(1.0, this.stateTime / this.DUR_CAST);
+            if (progress < this.RELEASE_PROGRESS) {
+              chargeEnergy = 1.0;
+            } else if (progress < 0.35) {
+              const u = (progress - this.RELEASE_PROGRESS) / (0.35 - this.RELEASE_PROGRESS);
+              chargeEnergy = Math.max(0, 1.0 - u);
+            } else {
+              chargeEnergy = 0.0;
+            }
+            break;
+
+          case STATE_RECOVER:
+            progress = Math.min(1.0, this.stateTime / this.DUR_RECOVER);
+            chargeEnergy = 0.0;
+            break;
+        }
+
+        // Camera push envelope (0-80% push, hold 80-100% and CAST 0-15%, smooth ease-out across CAST 15-100%)
+        let cameraPush = 0.0;
+        if (this.state === STATE_CHARGE) {
+          if (progress < 0.80) {
+            const u = progress / 0.80;
+            cameraPush = u * u * (3 - 2 * u);
+          } else {
+            cameraPush = 1.0;
+          }
+        } else if (this.state === STATE_CAST) {
+          if (progress < this.RELEASE_PROGRESS) {
+            cameraPush = 1.0;
+          } else {
+            const u = (progress - this.RELEASE_PROGRESS) / (1.0 - this.RELEASE_PROGRESS);
+            cameraPush = Math.max(0.0, 1.0 - u * u);
+          }
+        }
+
+        // Exposure offset envelope (impact flash <= 0.18 EV decaying in 0.12s, release <= 0.04 EV)
+        let exposureOffset = 0.0;
+        if (this.releaseAge >= 0 && this.releaseAge < 0.08) {
+          exposureOffset += 0.04 * (1.0 - this.releaseAge / 0.08);
+        }
+        if (this.impactAge >= 0 && this.impactAge < 0.12) {
+          exposureOffset += 0.18 * (1.0 - this.impactAge / 0.12);
+        }
+        exposureOffset = Math.min(0.20, exposureOffset);
+
+        // Floor rune response envelope
+        let floorRuneResponse = 0.0;
+        if (this.state === STATE_CHARGE) {
+          floorRuneResponse = chargeEnergy * 0.45;
+        } else if (this.state === STATE_CAST && progress < 0.35) {
+          floorRuneResponse = chargeEnergy * 0.45;
+        }
+
+        return {
+          castId: this.castId,
+          state: this.state,
+          stateTime: this.stateTime,
+          totalTime: this.totalTime,
+          progress,
+          chargeEnergy,
+          releaseFired: this.releaseFired,
+          impactFired: this.impactFired,
+          releaseAge: this.releaseAge,
+          impactAge: this.impactAge,
+          cameraPush,
+          exposureOffset,
+          floorRuneResponse,
+          earlyReleaseSnapshot: this.earlyReleaseSnapshot,
+          recoverySnapshot: this.recoverySnapshot
+        };
+      }
+
+      reset() {
+        this.state = STATE_IDLE;
+        this.stateTime = 0.0;
+        this.releaseFired = false;
+        this.impactFired = false;
+        this.releaseAge = -1.0;
+        this.impactAge = -1.0;
+        this.earlyReleaseSnapshot = null;
+        this.recoverySnapshot = null;
+        this.pendingEvents = [];
       }
     }
 
@@ -3088,21 +4554,23 @@
         this.renderMode = RENDER_MODE_COMPOSER_BLOOM_ON;
         this.initPostProcessing();
 
-        // State Machine Timing
-        this.state = STATE_IDLE;
-        this.stateTime = 0;
-        this.totalTime = 0;
+        // Phase 4: SpellDirector and Fixed Simulation Architecture
+        this.spellDirector = new SpellDirector();
+        window.spellDirector = this.spellDirector;
+        this.fixedDelta = 1 / 120; // Astra specified 1/120s fixed simulation step
+        this.accumulator = 0.0;
+        this.maxBacklogSteps = 24; // Up to 24 simulation steps per rendered frame
+
         this.timeScale = 1.0;
         this.autoLoop = true;
-
-        this.DUR_IDLE = 2.0;
-        this.DUR_CHARGE = 1.8;
-        this.DUR_CAST = 1.3;
-        this.DUR_RECOVER = 1.0;
+        this.spellDirector.setLoop(this.autoLoop);
 
         this.gemWorldPos = new THREE.Vector3();
+        this.strikeTargetPos = new THREE.Vector3(10.2, 3.4, 0.0);
+        this.strikeNormal = new THREE.Vector3(-1.0, 0.0, 0.0);
+        this.strikeDir = new THREE.Vector3();
 
-        // Track event counts for Phase 0 inspection
+        // Track event counts for deterministic inspection
         this.eventCounts = {
           casts: 0,
           releases: 0,
@@ -3116,7 +4584,7 @@
         this.btnRenderMode = document.getElementById('btn-render-mode');
 
         this.initEventListeners();
-        this.updateUIState();
+        this.updateUIFromSample(this.spellDirector.sample());
 
         // Initial Transform & Scalar Sanity Validation (Phase 0)
         this.validateInitialState();
@@ -3125,35 +4593,44 @@
         this.animate = this.animate.bind(this);
         this.animationFrameId = requestAnimationFrame(this.animate);
 
-        // Expose inspection interface for Phase 0
+        // Expose inspection interface for testing & verification
         window.__WIZARD_V3__ = {
           app: this,
-          getState: () => ({
-            state: ['IDLE', 'CHARGE', 'CAST', 'RECOVER'][this.state],
-            stateTime: this.stateTime,
-            totalTime: this.totalTime,
-            progress: this.getProgress(),
-            renderMode: ['BLOOM_ON', 'BLOOM_OFF', 'DIRECT'][this.renderMode],
-            vortexActive: this.particles.vortexPoints.visible,
-            sparksActive: this.particles.sparkPoints.visible,
-            gemPosition: this.gemWorldPos.toArray(),
-            eventCounts: { ...this.eventCounts },
-            poolOccupancy: {
-              vortexActive: this.particles.vortexPoints.visible ? this.particles.MAX_VORTEX : 0,
-              sparksActive: this.particles.getActiveSparkCount(),
-              maxVortex: this.particles.MAX_VORTEX,
-              maxSparks: this.particles.MAX_SPARKS
-            },
-            renderStatistics: {
-              calls: this.renderer.info.render.calls,
-              triangles: this.renderer.info.render.triangles,
-              points: this.renderer.info.render.points,
-              geometries: this.renderer.info.memory.geometries,
-              textures: this.renderer.info.memory.textures
-            }
-          }),
+          director: this.spellDirector,
+          getState: () => {
+            const sample = this.spellDirector.sample();
+            return {
+              state: ['IDLE', 'CHARGE', 'CAST', 'RECOVER'][sample.state],
+              stateTime: sample.stateTime,
+              totalTime: sample.totalTime,
+              progress: sample.progress,
+              chargeEnergy: sample.chargeEnergy,
+              castId: sample.castId,
+              releaseAge: sample.releaseAge,
+              impactAge: sample.impactAge,
+              renderMode: ['BLOOM_ON', 'BLOOM_OFF', 'DIRECT'][this.renderMode],
+              vortexActive: this.particles.vortexPoints.visible,
+              sparksActive: this.particles.sparkPoints.visible,
+              projectileActive: this.projectiles.active,
+              gemPosition: this.gemWorldPos.toArray(),
+              eventCounts: { ...this.eventCounts },
+              poolOccupancy: {
+                vortexActive: this.particles.vortexPoints.visible ? this.particles.MAX_VORTEX : 0,
+                sparksActive: this.particles.getActiveSparkCount(),
+                maxVortex: this.particles.MAX_VORTEX,
+                maxSparks: this.particles.MAX_SPARKS
+              },
+              renderStatistics: {
+                calls: this.renderer.info.render.calls,
+                triangles: this.renderer.info.render.triangles,
+                points: this.renderer.info.render.points,
+                geometries: this.renderer.info.memory.geometries,
+                textures: this.renderer.info.memory.textures
+              }
+            };
+          },
           setRenderMode: (mode) => this.setRenderMode(mode),
-          step: (dt = 1/60) => this.stepSimulation(dt)
+          step: (dt = 1/120) => this.stepSimulation(dt)
         };
       }
 
@@ -3252,7 +4729,6 @@
         this.composer.addPass(this.renderPass);
 
         // 2. Restrained UnrealBloomPass (threshold 1.1, strength 0.35, radius 0.35)
-        // High threshold ensures bloom only catches the gem, magical runes and sparks!
         this.bloomPass = new UnrealBloomPass(
           new THREE.Vector2(w * this.dpr, h * this.dpr),
           0.35, // strength
@@ -3302,7 +4778,6 @@
       }
 
       validateInitialState() {
-        // Phase 0: Validate that all initial transforms and lights are finite (no NaNs)
         const checkFinite = (val, name) => {
           if (!Number.isFinite(val)) {
             console.error(`Non-finite transform/scalar detected in ${name}:`, val);
@@ -3322,11 +4797,7 @@
         const btnCast = document.getElementById('btn-cast-now');
         const triggerCast = () => {
           audio.handleUserInteraction();
-          if (this.state === STATE_IDLE || this.state === STATE_RECOVER) {
-            this.setState(STATE_CHARGE);
-          } else if (this.state === STATE_CHARGE) {
-            this.setState(STATE_CAST);
-          }
+          this.spellDirector.requestCast(this.characterAdapter);
         };
 
         window.addEventListener('pointerdown', () => audio.handleUserInteraction());
@@ -3362,6 +4833,7 @@
         btnLoop.addEventListener('click', () => {
           this.autoLoop = !this.autoLoop;
           btnLoop.classList.toggle('active', this.autoLoop);
+          this.spellDirector.setLoop(this.autoLoop);
         });
 
         const btnAudio = document.getElementById('btn-audio');
@@ -3375,46 +4847,22 @@
         btnUI.addEventListener('click', () => {
           document.getElementById('ui-container').classList.toggle('ui-hidden');
         });
+
+        // Page Visibility Handling (Phase 4 requirement)
+        document.addEventListener('visibilitychange', () => {
+          const isVisible = !document.hidden;
+          if (!isVisible) {
+            this.accumulator = 0.0;
+            audio.onVisibilityChange(false);
+          } else {
+            this.clock.getDelta(); // Clear delta jump upon tab return
+            this.accumulator = 0.0;
+            audio.onVisibilityChange(true);
+          }
+        });
       }
 
-      setState(newState) {
-        this.state = newState;
-        this.stateTime = 0;
-        this.updateUIState();
-
-        if (this.state === STATE_CHARGE) {
-          this.eventCounts.casts++;
-          audio.playChargeStart(this.DUR_CHARGE / this.timeScale);
-        } else if (this.state === STATE_CAST) {
-          this.eventCounts.releases++;
-          this.wizard.setPoseCast(0.10, this.totalTime);
-          this.wizard.getGemWorldPosition(this.gemWorldPos);
-
-          audio.playCastBurst();
-          this.director.addTrauma(0.85);
-
-          this.particles.spawnShockwave(
-            this.gemWorldPos,
-            new THREE.Vector3(1, 0, 0),
-            5.5,
-            0.5,
-            0x00f0ff
-          );
-
-          this.particles.spawnBurst(
-            this.gemWorldPos,
-            75,
-            12.0,
-            new THREE.Vector3(1, 0.15, 0),
-            0x00f0ff
-          );
-
-          const targetPos = new THREE.Vector3(11.0, 3.5, 0);
-          this.projectiles.launch(this.gemWorldPos, targetPos);
-        }
-      }
-
-      updateUIState() {
+      updateUIFromSample(sample) {
         const stateConfig = [
           { name: 'IDLE', color: '#7388aa' },
           { name: 'CHARGE', color: '#00f0ff' },
@@ -3422,90 +4870,104 @@
           { name: 'RECOVER', color: '#ffd147' }
         ];
 
-        const cfg = stateConfig[this.state];
+        const cfg = stateConfig[sample.state];
         this.uiText.textContent = cfg.name;
         this.uiText.style.color = cfg.color;
         this.uiDot.style.background = cfg.color;
         this.uiDot.style.boxShadow = `0 0 12px ${cfg.color}`;
-      }
-
-      getProgress() {
-        switch (this.state) {
-          case STATE_IDLE: return this.stateTime / this.DUR_IDLE;
-          case STATE_CHARGE: return this.stateTime / this.DUR_CHARGE;
-          case STATE_CAST: return this.stateTime / this.DUR_CAST;
-          case STATE_RECOVER: return this.stateTime / this.DUR_RECOVER;
-          default: return 0;
-        }
-      }
-
-      stepSimulation(dt) {
-        this.totalTime += dt;
-        this.stateTime += dt;
-
-        let chargeIntensity = 0.0;
-        let progress = 0.0;
-
-        switch (this.state) {
-          case STATE_IDLE:
-            progress = this.stateTime / this.DUR_IDLE;
-            this.wizard.setPoseIdle(progress, this.totalTime);
-            chargeIntensity = 0.0;
-            if (this.autoLoop && this.stateTime >= this.DUR_IDLE) {
-              this.setState(STATE_CHARGE);
-            }
-            break;
-
-          case STATE_CHARGE:
-            progress = this.stateTime / this.DUR_CHARGE;
-            chargeIntensity = progress;
-            this.wizard.setPoseCharge(progress, this.totalTime);
-            if (this.stateTime >= this.DUR_CHARGE) {
-              this.setState(STATE_CAST);
-            }
-            break;
-
-          case STATE_CAST:
-            progress = this.stateTime / this.DUR_CAST;
-            this.wizard.setPoseCast(progress, this.totalTime);
-            chargeIntensity = Math.max(0, 1.0 - progress * 2.0);
-            if (this.stateTime >= this.DUR_CAST) {
-              this.setState(STATE_RECOVER);
-            }
-            break;
-
-          case STATE_RECOVER:
-            progress = this.stateTime / this.DUR_RECOVER;
-            this.wizard.setPoseRecover(progress, this.totalTime);
-            chargeIntensity = 0.0;
-            if (this.stateTime >= this.DUR_RECOVER) {
-              this.setState(STATE_IDLE);
-            }
-            break;
-        }
-
-        this.wizard.getGemWorldPosition(this.gemWorldPos);
 
         const displayProgress = this.autoLoop
-          ? Math.min(100, Math.max(0, progress * 100))
-          : (this.state === STATE_IDLE ? 0 : Math.min(100, Math.max(0, progress * 100)));
+          ? Math.min(100, Math.max(0, sample.progress * 100))
+          : (sample.state === STATE_IDLE ? 0 : Math.min(100, Math.max(0, sample.progress * 100)));
         this.uiFill.style.width = `${displayProgress}%`;
+      }
 
-        this.particles.updateVortex(dt, this.gemWorldPos, chargeIntensity);
-        this.projectiles.update(dt);
-        this.particles.updateSparks(dt);
-        this.env.update(this.totalTime, chargeIntensity);
-        this.env.decayImpactLight(dt);
-        this.director.update(dt, this.totalTime);
+      // Exact 12-Step Simulation Pipeline (Astra Architecture Spec)
+      stepSimulation(simDt) {
+        // 1. Advance SpellDirector
+        this.spellDirector.advance(simDt);
+        const sample = this.spellDirector.sample();
+
+        // 2. Identify due events
+        const events = this.spellDirector.pendingEvents.splice(0);
+        for (let i = 0; i < events.length; i++) {
+          const ev = events[i];
+          if (ev.type === 'CHARGE_START') {
+            this.eventCounts.casts++;
+            audio.startChargeVoice();
+          }
+        }
+
+        // 3. Apply character pose and secondary motion
+        this.characterAdapter.applyPose(sample, simDt, sample.earlyReleaseSnapshot, sample.recoverySnapshot);
+
+        // 4. Update world matrices
+        this.wizard.group.updateMatrixWorld(true);
+
+        // 5. If release occurs: Sample gem once, sample spell direction, fire release event once
+        for (let i = 0; i < events.length; i++) {
+          const ev = events[i];
+          if (ev.type === 'RELEASE') {
+            this.eventCounts.releases++;
+            this.wizard.getGemWorldPosition(this.gemWorldPos);
+            this.env.getStrikeTarget(this.strikeTargetPos);
+            this.env.getStrikeNormal(this.strikeNormal);
+            this.strikeDir.subVectors(this.strikeTargetPos, this.gemWorldPos).normalize();
+
+            // Emit to hero VFX, projectile, audio and camera response
+            this.particles.onRelease(this.gemWorldPos, this.strikeDir);
+            this.projectiles.launch(this.gemWorldPos, this.strikeTargetPos, this.strikeNormal, sample.castId);
+            audio.playCastBurst();
+            this.director.onRelease();
+          }
+        }
+
+        // 6. Update projectile motion & ribbon
+        this.projectiles.update(simDt, this.camera);
+
+        // 7. Resolve exact impact crossing
+        const impactEvent = this.projectiles.consumeImpact();
+
+        // 8. Emit impact event once to SpellDirector
+        if (impactEvent) {
+          this.spellDirector.notifyImpact(impactEvent);
+        }
+
+        // 9. Apply event reactions if impact occurred
+        const postEvents = this.spellDirector.pendingEvents.splice(0);
+        for (let i = 0; i < postEvents.length; i++) {
+          const ev = postEvents[i];
+          if (ev.type === 'IMPACT') {
+            this.eventCounts.detonations++;
+            this.env.triggerImpactFlash();
+            this.particles.onImpact(ev.point, ev.normal);
+            audio.playImpactBoom();
+            this.director.onImpact();
+          }
+        }
+
+        // 10. Update audio voice modulation
+        audio.updateChargeVoice(sample.chargeEnergy);
+        if ((sample.state === STATE_IDLE || sample.state === STATE_RECOVER) && audio.chargeOsc) {
+          audio.stopChargeVoice();
+        }
+
+        // 11. Update particle and environment envelopes
+        this.wizard.getGemWorldPosition(this.gemWorldPos);
+        this.particles.updateVortex(simDt, this.gemWorldPos, sample.chargeEnergy, sample.releaseFired);
+        this.particles.updateSparks(simDt);
+        this.env.update(sample.totalTime, sample.floorRuneResponse, simDt);
+        this.env.decayImpactLight(simDt);
+
+        // 12. Publish one consistent snapshot to HUD
+        this.updateUIFromSample(sample);
       }
 
       renderFrame() {
         if (this.renderMode === RENDER_MODE_DIRECT) {
-          // Direct render bypass with matching tone-mapped background clear color
           this.scene.background = this.directBgColor;
           this.renderer.render(this.scene, this.camera);
         } else {
-          // EffectComposer pipeline (Bloom ON or Bloom OFF with OutputPass conversion)
           this.scene.background = this.origBgColor;
           this.composer.render();
         }
@@ -3513,9 +4975,42 @@
 
       animate() {
         this.animationFrameId = requestAnimationFrame(this.animate);
+
+        // Guard against tab suspension / frame freeze runaway
+        if (document.hidden) {
+          this.accumulator = 0.0;
+          this.clock.getDelta();
+          return;
+        }
+
         const rawDt = this.clock.getDelta();
-        const dt = Math.min(rawDt, 0.1) * this.timeScale;
-        this.stepSimulation(dt);
+        const realDt = Math.min(rawDt, 0.1);
+
+        // Fixed 1/120s simulation accumulator
+        this.accumulator += realDt * this.timeScale;
+
+        // Discard excessive backlog after tab suspension or frame freeze
+        if (this.accumulator > this.maxBacklogSteps * this.fixedDelta) {
+          this.accumulator = this.maxBacklogSteps * this.fixedDelta;
+        }
+
+        while (this.accumulator >= this.fixedDelta) {
+          this.stepSimulation(this.fixedDelta);
+          this.accumulator -= this.fixedDelta;
+        }
+
+        // Camera convergence uses real delta, spell offsets use timeline sample
+        const sample = this.spellDirector.sample();
+        this.director.update(realDt, sample);
+
+        // Tone mapping exposure adjustment (bounded impact flash <= 0.20 EV)
+        this.renderer.toneMappingExposure = 1.0 + sample.exposureOffset;
+
+        // Restrained bloom modulation on impact flash
+        if (this.bloomPass && this.renderMode === RENDER_MODE_COMPOSER_BLOOM_ON) {
+          this.bloomPass.strength = 0.35 + sample.exposureOffset * 0.35;
+        }
+
         this.renderFrame();
       }
 
