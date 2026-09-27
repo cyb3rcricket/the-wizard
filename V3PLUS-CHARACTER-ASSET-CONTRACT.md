@@ -78,7 +78,7 @@ interface CharacterAdapter {
 The authored character model must export cleanly from Blender into a self-contained GLB file without altering world coordinates.
 
 ```
-                           +Y (World Up)
+                           +Y (World & Local Up)
                              ^
                              |       Staff Gem (spell_origin)
                              |          [O] ~3.2m - 3.6m
@@ -91,9 +91,11 @@ The authored character model must export cleanly from Blender into a self-contai
                              |    /   \  |
                              |   [Robe ] |
                              |  /       \|
-    -------------------------+-----------+--------------------> +X (Toward Monolith Target)
-      Ground Origin (0,0,0)  |  Feet/Hem
+    -------------------------+-----------+--------------------> +Z (Authored Local Forward)
+      Ground Origin (0,0,0)  |  Feet/Hem (Local Y = 0)
 ```
+
+*(Note: Local authored forward is strictly +Z; the runtime normalization wrapper handles rotating this into the established V3 world stance toward the +X target monolith at $(10.2, 3.4, 0.0)$; artists must NOT pre-rotate the character into world +X).*
 
 ### 3.1 Spatial Conventions
 
@@ -134,7 +136,7 @@ Named attachment points are empty nodes, locator objects, or dedicated bones exp
 | Attachment Name | Required | Parent / Location | Expected Coordinates (Local) | Consuming System | Failure / Fallback Behavior |
 |---|---|---|---|---|---|
 | `spell_origin` | **YES (P0)** | Child of Staff bone or Gem bone, at the geometric center of the focus crystal. | $X \approx 0.3 - 0.7$, $Y \approx 3.0 - 3.6$, $Z \approx 0.2 - 0.6$ (staff raised stance) | `ParticleEngine` (vortex anchor & release burst), `ProjectileSystem` (launch origin), `PointLight` (gem glow). | **FATAL CONTRACT BREACH.** Model rejected immediately. Procedural wizard remains active. **NEVER** launch from $(0,0,0)$ or root. |
-| `staff_grip` | **YES (P0)** | Child of Right Hand bone (`hand.R` / `RightHand`). Located at palm center. | Matches right hand palm transform. | Attaches staff geometry if exported as separate node; establishes arm-to-weapon kinematics. | Model rejected or warning issued if staff is embedded. |
+| `staff_grip` | **YES (P0)** | Child of Right Hand bone (`hand.R` / `RightHand`). Located at palm center. | Matches right hand palm transform. | Attaches staff geometry if exported as separate node; establishes arm-to-weapon kinematics. | **FATAL CONTRACT BREACH.** Model rejected immediately. Procedural wizard remains active. Authored GLB requires validated `staff_grip` attachment. |
 | `head` | **YES (P0)** | Child of Head bone (`head`). Located at face/eye level. | $X \approx 0.0$, $Y \approx 2.8 - 3.2$, $Z \approx 0.0 - 0.2$ | `CameraDirector` (Hero portrait framing), character accent lighting. | **FATAL CONTRACT BREACH.** Model rejected immediately. Procedural wizard remains active. Authored GLB requires validated `head` attachment. No bounding-box fallback. |
 | `camera_target` | **NO (Recommended)** | Child of Chest or Neck bone. Centered at upper chest / collarbone. | $X \approx 0.0$, $Y \approx 2.5 - 2.8$, $Z \approx 0.0$ | `CameraDirector` (Cinematic, Classic, and Hero look-at target). | **RECOMMENDED, not required.** Falls back to `head` attachment position minus $0.3\text{m}$ downward Y offset for framing. Asset must NOT fail validation solely because `camera_target` is absent. |
 | `somatic_hand` | Optional | Child of Left Hand bone (`hand.L` / `LeftHand`). Located at fingertips / palm. | $X \approx -0.4 - -0.8$, $Y \approx 2.0 - 2.6$, $Z \approx 0.2 - 0.5$ | Optional somatic spell charging sparks / runes. | Ignored if absent. |

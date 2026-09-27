@@ -550,13 +550,15 @@ def validate_wizard_glb(gltf: Dict[str, Any], file_size: int, strict: bool = Fal
             "height": round(dy, 2)
         }
 
-        # Check height sanity (expected ~2.0m - 4.5m)
+        # Check height sanity (sanity bounds 1.0m - 10.0m; preferred target: 3.8m ± 0.4m)
         if dy < 1.0:
             report.fatal_errors.append(f"Character height {dy:.2f}m is absurdly small (< 1.0m). Check export scale.")
         elif dy > 10.0:
             report.fatal_errors.append(f"Character height {dy:.2f}m is absurdly large (> 10.0m). Check export scale.")
         else:
-            report.passed_checks.append(f"Character height {dy:.2f}m is within expected range (2.0m - 4.5m)")
+            report.passed_checks.append(
+                f"Character height {dy:.2f}m is within plausible sanity bounds (preferred target: 3.8m ± 0.4m)"
+            )
 
         # Check ground origin (bottom of bounds near y=0)
         if abs(global_min[1]) > 0.5:

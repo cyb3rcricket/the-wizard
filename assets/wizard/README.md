@@ -31,7 +31,7 @@ Before exporting and placing a model here, consult the complete specification:
 3. **Named Attachment Points**:
    - **Required Attachments (P0)** (Missing any required attachment fails validation, rejects the authored asset, and retains procedural V3; no missing required attachment silently falls back to world origin):
      - `spell_origin`: Center of the magical gem/crystal at the staff head (where projectiles launch and vortex particles converge). **Never place at `(0,0,0)`.**
-     - `staff_grip`: Right hand socket node gripping the staff.
+     - `staff_grip`: Right hand socket node gripping the staff. **Required.** If missing, validation fails, authored GLB is not activated, and procedural V3 remains active.
      - `head`: Head center / face orientation node (for hero camera framing and rim lighting). **Required.** If missing, validation fails, authored GLB is not activated, and procedural V3 remains active.
    - **Recommended Attachments**:
      - `camera_target`: Look-at framing focus node (at upper chest / collarbone level, `y ~2.5m–2.8m`). **Recommended, not required.** If absent, falls back to `head` attachment position minus a documented downward Y offset (~0.3m) for framing. Asset must NOT fail validation solely because `camera_target` is absent.
