@@ -9,7 +9,8 @@ import websockets
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import threading
 
-REPO_DIR = "/Volumes/Backup Plus/GitHub/The-Wizard"
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCREENSHOT_DIR = os.path.join(REPO_DIR, "screenshots")
 BRAVE_BIN = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
 HTTP_PORT = 8765
 CDP_PORT = 9222
@@ -71,7 +72,7 @@ class CDPClient:
     async def screenshot(self, filename):
         res = await self.send('Page.captureScreenshot', {'format': 'png'})
         data = base64.b64decode(res['data'])
-        filepath = os.path.join(REPO_DIR, filename)
+        filepath = os.path.join(SCREENSHOT_DIR, filename)
         with open(filepath, 'wb') as f:
             f.write(data)
         print(f"Captured screenshot: {filename} ({len(data)} bytes)")

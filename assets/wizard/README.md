@@ -18,7 +18,7 @@ The procedural character implementation in `wizard-v3.html` serves as the comple
 ## Asset Requirements & Integration Contract
 
 Before exporting and placing a model here, consult the complete specification:
-- [`../../V3PLUS-CHARACTER-ASSET-CONTRACT.md`](../../V3PLUS-CHARACTER-ASSET-CONTRACT.md)
+- [`../../docs/V3PLUS-CHARACTER-ASSET-CONTRACT.md`](../../docs/V3PLUS-CHARACTER-ASSET-CONTRACT.md)
 
 ### Key Checklist Summary
 

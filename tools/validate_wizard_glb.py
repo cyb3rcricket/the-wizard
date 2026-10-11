@@ -3,7 +3,7 @@
 Wizard V3+ GLB Character Asset Contract Validator
 =================================================
 Validates future authored Wizard 3D GLB assets against the Wizard V3+ Character
-Asset Contract (V3PLUS-CHARACTER-ASSET-CONTRACT.md).
+Asset Contract (docs/V3PLUS-CHARACTER-ASSET-CONTRACT.md).
 
 Pure Python standard library implementation with ZERO external dependencies.
 Directly inspects the binary GLB container and glTF 2.0 JSON metadata chunk.
